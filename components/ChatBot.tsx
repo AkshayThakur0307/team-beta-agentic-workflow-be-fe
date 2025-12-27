@@ -1,13 +1,12 @@
-
 import React, { useState, useRef, useEffect } from 'react';
-import { GoogleGenAI } from "@google/genai";
+import Groq from "groq-sdk";
 import { AppState, DiscoveryStage } from '../types';
 import MarkdownRenderer from './MarkdownRenderer';
 import { STAGE_CONFIGS } from '../constants';
 
 interface Message {
-  role: 'user' | 'model';
-  text: string;
+  role: 'user' | 'assistant';
+  content: string;
 }
 
 interface ChatBotProps {
@@ -17,7 +16,7 @@ interface ChatBotProps {
 const ChatBot: React.FC<ChatBotProps> = ({ appState }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [messages, setMessages] = useState<Message[]>([
-    { role: 'model', text: "Hello! I'm your Discovery Assistant. I'm currently tracking your progress in **" + STAGE_CONFIGS[appState.currentStage].title + "**. How can I help?" }
+    { role: 'assistant', content: "Hello! I'm your Discovery Assistant. I'm currently tracking your progress in **" + STAGE_CONFIGS[appState.currentStage].title + "**. How can I help?" }
   ]);
   const [input, setInput] = useState('');
   const [isTyping, setIsTyping] = useState(false);
@@ -37,8 +36,8 @@ const ChatBot: React.FC<ChatBotProps> = ({ appState }) => {
     if (lastStageRef.current !== appState.currentStage) {
       const newStageName = STAGE_CONFIGS[appState.currentStage].title;
       setMessages(prev => [
-        ...prev, 
-        { role: 'model', text: `🔄 **Context Switched**: I've synchronized with the **${newStageName}** module. I'm ready to assist with this specific stage.` }
+        ...prev,
+        { role: 'assistant', content: `🔄 **Context Switched**: I've synchronized with the **${newStageName}** module. I'm ready to assist with this specific stage.` }
       ]);
       lastStageRef.current = appState.currentStage;
     }
@@ -47,7 +46,7 @@ const ChatBot: React.FC<ChatBotProps> = ({ appState }) => {
   const handleReset = () => {
     if (window.confirm("Clear chat history? This will reset our conversation context.")) {
       setMessages([
-        { role: 'model', text: `Context cleared. I'm still tracking your work in **${STAGE_CONFIGS[appState.currentStage].title}**. How can I help you start fresh?` }
+        { role: 'assistant', content: `Context cleared. I'm still tracking your work in **${STAGE_CONFIGS[appState.currentStage].title}**. How can I help you start fresh?` }
       ]);
     }
   };
@@ -57,15 +56,19 @@ const ChatBot: React.FC<ChatBotProps> = ({ appState }) => {
 
     const userMessage = input.trim();
     setInput('');
-    setMessages(prev => [...prev, { role: 'user', text: userMessage }]);
+    setMessages(prev => [...prev, { role: 'user', content: userMessage }]);
     setIsTyping(true);
 
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+      if (!process.env.GROQ_API_KEY) {
+        throw new Error("GROQ_API_KEY is missing.");
+      }
+
+      const groq = new Groq({ apiKey: process.env.GROQ_API_KEY, dangerouslyAllowBrowser: true });
       const currentStageData = appState.stages[appState.currentStage];
-      
+
       const systemInstruction = `
-        You are the "Discovery Pro AI Assistant", an expert product strategist.
+        You are the "Discovery Pro AI Assistant", an expert product strategist powered by GPT-OSS-120B via Groq.
         
         GLOBAL CONTEXT:
         - Company: ${appState.projectMetadata.companyName}
@@ -92,28 +95,22 @@ const ChatBot: React.FC<ChatBotProps> = ({ appState }) => {
         - Reference the global mission and company name whenever providing strategic advice.
       `;
 
-      const chatHistory = messages.map(m => ({
-        role: m.role,
-        parts: [{ text: m.text }]
-      }));
-
-      const response = await ai.models.generateContent({
-        model: 'gemini-3-pro-preview',
-        contents: [
-          ...chatHistory,
-          { role: 'user', parts: [{ text: userMessage }] }
+      const response = await groq.chat.completions.create({
+        model: 'openai/gpt-oss-120b',
+        messages: [
+          { role: 'system', content: systemInstruction },
+          ...messages.map(m => ({ role: m.role, content: m.content })),
+          { role: 'user', content: userMessage }
         ],
-        config: {
-          systemInstruction,
-          temperature: 0.7,
-        }
+        temperature: 0.7,
+        max_tokens: 1024,
       });
 
-      const aiText = response.text || "I'm sorry, I'm having trouble processing that thought.";
-      setMessages(prev => [...prev, { role: 'model', text: aiText }]);
+      const aiText = response.choices[0]?.message?.content || "I'm sorry, I'm having trouble processing that thought.";
+      setMessages(prev => [...prev, { role: 'assistant', content: aiText }]);
     } catch (error) {
       console.error("ChatBot Error:", error);
-      setMessages(prev => [...prev, { role: 'model', text: "Connection error. My intelligence engine is temporarily unavailable." }]);
+      setMessages(prev => [...prev, { role: 'assistant', content: "Connection error. My intelligence engine is temporarily unavailable." }]);
     } finally {
       setIsTyping(false);
     }
@@ -156,7 +153,7 @@ const ChatBot: React.FC<ChatBotProps> = ({ appState }) => {
             </div>
           </div>
           <div className="flex items-center gap-3">
-            <button 
+            <button
               onClick={handleReset}
               className="w-8 h-8 rounded-lg bg-slate-800/80 border border-slate-700 flex items-center justify-center text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 transition-all"
               title="Reset Conversation"
@@ -164,7 +161,7 @@ const ChatBot: React.FC<ChatBotProps> = ({ appState }) => {
               <i className="fas fa-trash-alt text-[10px]"></i>
             </button>
             <div className="w-px h-6 bg-slate-800"></div>
-            <button 
+            <button
               onClick={() => setIsOpen(false)}
               className="text-slate-500 hover:text-white transition-colors"
             >
@@ -178,14 +175,14 @@ const ChatBot: React.FC<ChatBotProps> = ({ appState }) => {
           {messages.map((msg, idx) => (
             <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
               <div className={`max-w-[88%] p-4 rounded-2xl text-[13px] leading-relaxed shadow-sm
-                ${msg.role === 'user' 
-                  ? 'bg-indigo-600 text-white rounded-br-none shadow-indigo-600/10' 
+                ${msg.role === 'user'
+                  ? 'bg-indigo-600 text-white rounded-br-none shadow-indigo-600/10'
                   : 'bg-slate-900/90 text-slate-200 border border-slate-800 rounded-bl-none shadow-black/20'}
               `}>
-                {msg.role === 'model' ? (
-                  <MarkdownRenderer content={msg.text} />
+                {msg.role === 'assistant' ? (
+                  <MarkdownRenderer content={msg.content} />
                 ) : (
-                  msg.text
+                  msg.content
                 )}
               </div>
             </div>
@@ -222,7 +219,7 @@ const ChatBot: React.FC<ChatBotProps> = ({ appState }) => {
             </button>
           </div>
           <p className="text-[8px] text-slate-600 uppercase font-black tracking-[0.2em] mt-3 text-center opacity-60">
-            Powered by Gemini 3 Pro Intelligence
+            Powered by Groq GPT-OSS Intelligence
           </p>
         </div>
       </div>

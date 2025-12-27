@@ -10,6 +10,7 @@ export const STAGE_CONFIGS = {
     label: 'Domain',
     placeholder: "Start by describing your product vision, the problem you're solving, or a raw business case...",
     cta: "Synthesize Domain",
+    regenerateCta: "Re-Analyze Domain Analysis",
     agentName: "Strategy Orchestrator",
     systemInstruction: `You are an expert Strategic Product Analyst. 
     Analyze the problem statement and business context. 
@@ -33,6 +34,7 @@ export const STAGE_CONFIGS = {
     label: 'BOD',
     placeholder: "Provide additional details on operational flows or business constraints...",
     cta: "Draft BOD",
+    regenerateCta: "Regenerate BOD",
     agentName: "Business Architect",
     systemInstruction: `You are a Senior Business Architect. 
     Based on the Domain Analysis and previous context, create a Business Overview Document.
@@ -58,6 +60,7 @@ export const STAGE_CONFIGS = {
     label: 'KPIs',
     placeholder: "Specify business goals, industry benchmarks, or data tracking requirements...",
     cta: "Establish Metrics",
+    regenerateCta: "Re-Calculate KPIs",
     agentName: "Performance Analyst",
     systemInstruction: `You are a Product Data Scientist. 
     Define the North Star, leading, and lagging indicators based on the provided BOD and Domain.
@@ -78,6 +81,7 @@ export const STAGE_CONFIGS = {
     label: 'Backlog',
     placeholder: "Tech stack constraints, team capacity, or non-functional requirements...",
     cta: "Generate Backlog",
+    regenerateCta: "Regenerate Backlog",
     agentName: "TPM Backlog Agent",
     systemInstruction: `You are a Technical Product Manager. 
     Convert everything into high-level Engineering Epics and granular User Stories. 

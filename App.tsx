@@ -2,8 +2,9 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { DiscoveryStage, AppState, FileContext, VoiceState, GroundingSource, ProjectMetadata, StageVersion } from './types';
 import { STAGE_CONFIGS } from './constants';
-import { callGeminiAgent } from './services/geminiService';
-import { createLiveAssistant } from './services/liveService';
+import { callGroqAgent } from './services/groqService';
+import { scrapeUrl } from './services/webScraper';
+import { GroqVoiceAssistant } from './services/groqVoiceService';
 import MarkdownRenderer from './components/MarkdownRenderer';
 import PresentationView from './components/PresentationView';
 import ChatBot from './components/ChatBot';
@@ -44,7 +45,7 @@ const App: React.FC = () => {
   const [showHistory, setShowHistory] = useState(false);
   const [showManual, setShowManual] = useState(false);
   const [urlInput, setUrlInput] = useState('');
-  
+
   // Refs
   const mainScrollRef = useRef<HTMLDivElement>(null);
   const liveSessionRef = useRef<any>(null);
@@ -93,7 +94,7 @@ const App: React.FC = () => {
 
   const calculateCoherenceScore = () => {
     let score = 40; // Base "Agent Ready" score
-    
+
     // Metadata Quality (Max +30)
     if (isMetadataComplete) score += 30;
     else {
@@ -128,14 +129,14 @@ const App: React.FC = () => {
       setVoice({ isActive: false, isListening: false, isSpeaking: false, transcript: '' });
     } else {
       setVoice(v => ({ ...v, isActive: true }));
-      liveSessionRef.current = createLiveAssistant({
+      liveSessionRef.current = new GroqVoiceAssistant({
         onUpdateMainContext: (text, mode) => {
           setState(prev => ({
             ...prev,
             stages: {
               ...prev.stages,
-              [prev.currentStage]: { 
-                ...prev.stages[prev.currentStage], 
+              [prev.currentStage]: {
+                ...prev.stages[prev.currentStage],
                 input: mode === 'replace' ? text : `${prev.stages[prev.currentStage].input}\n${text}`
               }
             }
@@ -160,7 +161,8 @@ const App: React.FC = () => {
           setVoice(v => ({ ...v, transcript: text }));
         },
         onStateChange: (s) => setVoice(v => ({ ...v, ...s }))
-      }, currentStageData.questions, currentStageData.input);
+      }, state);
+      liveSessionRef.current.start();
     }
   };
 
@@ -169,9 +171,17 @@ const App: React.FC = () => {
     const questions: string[] = [];
     let capture = false;
     for (const line of lines) {
-      if (line.toUpperCase().includes('QUESTIONS')) { capture = true; continue; }
-      if (capture && /^\d\./.test(line.trim())) {
-        questions.push(line.replace(/^\d\./, '').trim());
+      const trimmed = line.trim();
+      if (trimmed.toUpperCase().includes('CLARIFICATION QUESTIONS')) {
+        capture = true;
+        continue;
+      }
+      if (capture && /^[\*]*\d+[\.\)][\s\*]*/.test(trimmed)) {
+        const cleaned = trimmed
+          .replace(/^[\*]*\d+[\.\)][\s\*]*/, '')
+          .replace(/[\*]+$/, '')
+          .trim();
+        if (cleaned.length > 0) questions.push(cleaned);
       }
     }
     return questions;
@@ -199,7 +209,7 @@ const App: React.FC = () => {
     if (!urlInput.trim()) return;
     let url = urlInput.trim();
     if (!url.startsWith('http')) url = 'https://' + url;
-    
+
     setState(prev => ({
       ...prev,
       stages: {
@@ -232,25 +242,25 @@ const App: React.FC = () => {
 
     if (isReference) {
       const file = files[0];
-      const isMultimodal = 
-        file.type.startsWith('image/') || 
-        file.type.startsWith('video/') || 
+      const isMultimodal =
+        file.type.startsWith('image/') ||
+        file.type.startsWith('video/') ||
         file.type === 'application/pdf';
-      
-      const content = isMultimodal 
+
+      const content = isMultimodal
         ? await new Promise<string>((res) => {
-            const reader = new FileReader();
-            reader.onload = (ev) => res(ev.target?.result?.toString().split(',')[1] || '');
-            reader.readAsDataURL(file);
-          })
+          const reader = new FileReader();
+          reader.onload = (ev) => res(ev.target?.result?.toString().split(',')[1] || '');
+          reader.readAsDataURL(file);
+        })
         : await file.text();
-      
+
       setState(prev => ({
         ...prev,
         stages: {
           ...prev.stages,
-          [prev.currentStage]: { 
-            ...prev.stages[prev.currentStage], 
+          [prev.currentStage]: {
+            ...prev.stages[prev.currentStage],
             formatReference: { name: file.name, content, mimeType: file.type, size: file.size }
           }
         }
@@ -261,11 +271,11 @@ const App: React.FC = () => {
 
     const newFiles: FileContext[] = [];
     for (const file of Array.from(files) as File[]) {
-      const isMultimodal = 
-        file.type.startsWith('image/') || 
-        file.type.startsWith('video/') || 
+      const isMultimodal =
+        file.type.startsWith('image/') ||
+        file.type.startsWith('video/') ||
         file.type === 'application/pdf';
-      
+
       let content = '';
       if (isMultimodal) {
         content = await new Promise<string>((res) => {
@@ -283,9 +293,9 @@ const App: React.FC = () => {
       ...prev,
       stages: {
         ...prev.stages,
-        [prev.currentStage]: { 
-          ...prev.stages[prev.currentStage], 
-          files: [...prev.stages[prev.currentStage].files, ...newFiles] 
+        [prev.currentStage]: {
+          ...prev.stages[prev.currentStage],
+          files: [...prev.stages[prev.currentStage].files, ...newFiles]
         }
       }
     }));
@@ -334,7 +344,7 @@ const App: React.FC = () => {
   const importPrevious = () => {
     const stages = Object.values(DiscoveryStage) as DiscoveryStage[];
     const currIdx = stages.indexOf(state.currentStage);
-    
+
     if (currIdx === 0) {
       alert("No history to import: You are currently in the initial module.");
       return;
@@ -360,7 +370,7 @@ const App: React.FC = () => {
         return `--- ${s} ANALYSIS ---\n${stageData.output}${answeredQuestionsContext ? `\n\n--- ${s} REFINEMENTS ---\n${answeredQuestionsContext}` : ''}`;
       })
       .join('\n\n');
-    
+
     setState(prev => ({
       ...prev,
       stages: {
@@ -382,7 +392,7 @@ const App: React.FC = () => {
     const targetStage = state.currentStage;
     setAnalyzingStage(targetStage);
     setStatusIdx(0);
-    
+
     try {
       const prevContext = (Object.values(DiscoveryStage) as DiscoveryStage[])
         .slice(0, Object.values(DiscoveryStage).indexOf(targetStage))
@@ -429,10 +439,19 @@ Use the Stage-Specific Reference URLs provided to gather deep technical or busin
       const allFiles = [...stageData.files];
       if (stageData.formatReference) allFiles.push(stageData.formatReference);
 
-      const result = await callGeminiAgent(
-        targetStage === DiscoveryStage.DOMAIN ? 'gemini-3-flash-preview' : 'gemini-3-pro-preview',
+      // SCRAPING LOGIC
+      let finalUserPrompt = userPrompt;
+      if (stageData.urls && stageData.urls.length > 0) {
+        console.log("Scraping URLs...", stageData.urls);
+        const scrapePromises = stageData.urls.map(url => scrapeUrl(url));
+        const scrapedResults = await Promise.all(scrapePromises);
+        finalUserPrompt += `\n\n=== SCRAPED WEB CONTENT ===\n${scrapedResults.join('\n\n----------------\n\n')}\n===========================`;
+      }
+
+      const result = await callGroqAgent(
+        'openai/gpt-oss-120b',
         STAGE_CONFIGS[targetStage].systemInstruction,
-        userPrompt,
+        finalUserPrompt,
         allFiles,
         isThinkingEnabled,
         isSearchEnabled
@@ -460,8 +479,8 @@ Use the Stage-Specific Reference URLs provided to gather deep technical or busin
               stages: {
                 ...prev.stages,
                 [targetStage]: {
-                  ...oldData, 
-                  output: result.text, 
+                  ...oldData,
+                  output: result.text,
                   status: 'completed',
                   questions,
                   groundingSources: result.sources,
@@ -507,7 +526,7 @@ Use the Stage-Specific Reference URLs provided to gather deep technical or busin
 
   const exportData = async (type: 'md' | 'web' | 'pdf') => {
     if (!currentStageData.output) return;
-    
+
     const fullHtml = await marked.parse(currentStageData.output);
     const styles = `
       <style>
@@ -557,7 +576,7 @@ Use the Stage-Specific Reference URLs provided to gather deep technical or busin
   const resetCurrentStage = (e: React.MouseEvent) => {
     e.preventDefault();
     const stageToReset = state.currentStage;
-    
+
     if (window.confirm("Are you sure you want to reset this module? All inputs and generated output for this stage will be permanently cleared.")) {
       if (analyzingStage === stageToReset) {
         setAnalyzingStage(null);
@@ -607,8 +626,8 @@ Use the Stage-Specific Reference URLs provided to gather deep technical or busin
             <i className="fas fa-briefcase"></i>
           </div>
           <div className="flex-1 min-w-0">
-             <div className="text-[10px] font-black uppercase tracking-widest opacity-60">Global Context</div>
-             <div className="text-[11px] font-bold truncate">{state.projectMetadata.companyName || 'Configure Project'}</div>
+            <div className="text-[10px] font-black uppercase tracking-widest opacity-60">Global Context</div>
+            <div className="text-[11px] font-bold truncate">{state.projectMetadata.companyName || 'Configure Project'}</div>
           </div>
           <i className="fas fa-cog text-xs opacity-50"></i>
         </button>
@@ -675,11 +694,11 @@ Use the Stage-Specific Reference URLs provided to gather deep technical or busin
         <SidebarContent />
       </nav>
 
-      <div 
+      <div
         className={`fixed inset-0 z-50 bg-black/60 backdrop-blur-sm lg:hidden transition-opacity duration-300 ${isMobileMenuOpen ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'}`}
         onClick={() => isMetadataComplete && setIsMobileMenuOpen(false)}
       >
-        <nav 
+        <nav
           className={`absolute left-0 top-0 bottom-0 w-80 bg-slate-900 border-r border-slate-800 flex flex-col p-6 transition-transform duration-300 transform ${isMobileMenuOpen ? 'translate-x-0' : '-translate-x-full'}`}
           onClick={(e) => e.stopPropagation()}
         >
@@ -695,7 +714,7 @@ Use the Stage-Specific Reference URLs provided to gather deep technical or busin
       <main className="flex-1 flex flex-col overflow-hidden relative">
         <header className="min-h-[5.5rem] sm:h-20 border-b border-slate-800 flex items-center justify-between px-4 sm:px-10 glass shrink-0 z-10 print:hidden py-3 sm:py-0">
           <div className="flex-1 flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-6 min-w-0 pr-4">
-            <button 
+            <button
               onClick={() => setIsMobileMenuOpen(true)}
               className="lg:hidden w-10 h-10 rounded-xl bg-slate-800 flex items-center justify-center text-slate-400 hover:text-white transition-colors shrink-0"
             >
@@ -710,13 +729,13 @@ Use the Stage-Specific Reference URLs provided to gather deep technical or busin
                 <div className="flex items-center gap-2">
                   {isThinkingEnabled && (
                     <span className="px-2 py-1 rounded-full bg-indigo-500/10 border border-indigo-500/20 text-[8px] sm:text-[9px] font-black text-indigo-400 tracking-widest uppercase flex items-center gap-1.5 shrink-0">
-                      <i className="fas fa-brain text-[8px]"></i> 
+                      <i className="fas fa-brain text-[8px]"></i>
                       <span className="hidden xs:inline">Thinking</span>
                     </span>
                   )}
                   {isSearchEnabled && (
                     <span className="px-2 py-1 rounded-full bg-amber-500/10 border border-amber-500/20 text-[8px] sm:text-[9px] font-black text-amber-400 tracking-widest uppercase flex items-center gap-1.5 shrink-0">
-                      <i className="fas fa-search text-[8px]"></i> 
+                      <i className="fas fa-search text-[8px]"></i>
                       <span className="hidden xs:inline">Research</span>
                     </span>
                   )}
@@ -725,9 +744,9 @@ Use the Stage-Specific Reference URLs provided to gather deep technical or busin
               <p className="text-[9px] sm:text-[11px] text-slate-500 font-medium truncate hidden sm:block mt-1">{config.description}</p>
             </div>
           </div>
-          
+
           <div className="flex items-center gap-2 sm:gap-4 shrink-0">
-            <button 
+            <button
               onClick={toggleVoice}
               disabled={!isMetadataComplete}
               className={`w-9 h-9 sm:w-10 sm:h-10 rounded-xl flex items-center justify-center transition-all duration-500 border relative overflow-hidden group
@@ -742,9 +761,9 @@ Use the Stage-Specific Reference URLs provided to gather deep technical or busin
 
             {currentStageData.output && (
               <div className="flex items-center gap-2 sm:gap-3">
-                <button 
-                  onClick={() => setShowHistory(!showHistory)} 
-                  className={`w-8 h-8 sm:w-10 sm:h-10 rounded-xl btn-action flex items-center justify-center transition-all duration-300 hover:scale-105 ${showHistory ? 'bg-indigo-600 text-white border-indigo-400 shadow-[0_0_15px_rgba(99,102,241,0.4)]' : ''}`} 
+                <button
+                  onClick={() => setShowHistory(!showHistory)}
+                  className={`w-8 h-8 sm:w-10 sm:h-10 rounded-xl btn-action flex items-center justify-center transition-all duration-300 hover:scale-105 ${showHistory ? 'bg-indigo-600 text-white border-indigo-400 shadow-[0_0_15px_rgba(99,102,241,0.4)]' : ''}`}
                   title="Iteration History"
                 >
                   <i className={`fas fa-history ${showHistory ? 'text-white' : 'text-indigo-400'}`}></i>
@@ -761,16 +780,16 @@ Use the Stage-Specific Reference URLs provided to gather deep technical or busin
               </div>
             )}
 
-            <button 
-              onClick={() => setShowManual(true)} 
+            <button
+              onClick={() => setShowManual(true)}
               className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl btn-action flex items-center justify-center shrink-0"
               title="Product Manual & FRD"
             >
               <i className="fas fa-book text-xs sm:text-sm text-indigo-400"></i>
             </button>
 
-            <button 
-              onClick={resetCurrentStage} 
+            <button
+              onClick={resetCurrentStage}
               disabled={!isMetadataComplete}
               className={`w-9 h-9 sm:w-10 sm:h-10 rounded-xl btn-reset flex items-center justify-center shrink-0 group relative overflow-hidden shadow-lg active:shadow-inner
                 ${!isMetadataComplete ? 'opacity-30 cursor-not-allowed' : ''}
@@ -785,9 +804,9 @@ Use the Stage-Specific Reference URLs provided to gather deep technical or busin
         {voice.isActive && (
           <div className="bg-indigo-600/10 border-b border-indigo-500/20 px-6 py-2 flex items-center gap-4 animate-in slide-in-from-top-full duration-500 overflow-hidden print:hidden">
             <div className="flex gap-1 h-3 items-end shrink-0">
-               {[1,2,3,4,5].map(i => (
-                 <div key={i} className={`w-0.5 bg-indigo-500 rounded-full transition-all duration-300 ${voice.isSpeaking || voice.isListening ? 'animate-[bounce_1s_infinite]' : 'h-1'}`} style={{ animationDelay: `${i * 0.1}s`, height: voice.isSpeaking || voice.isListening ? '100%' : '20%' }}></div>
-               ))}
+              {[1, 2, 3, 4, 5].map(i => (
+                <div key={i} className={`w-0.5 bg-indigo-500 rounded-full transition-all duration-300 ${voice.isSpeaking || voice.isListening ? 'animate-[bounce_1s_infinite]' : 'h-1'}`} style={{ animationDelay: `${i * 0.1}s`, height: voice.isSpeaking || voice.isListening ? '100%' : '20%' }}></div>
+              ))}
             </div>
             <p className="text-[10px] font-black uppercase tracking-[0.2em] text-indigo-400 shrink-0">Assistant Active</p>
             <div className="h-4 w-px bg-indigo-500/20 shrink-0"></div>
@@ -796,12 +815,12 @@ Use the Stage-Specific Reference URLs provided to gather deep technical or busin
           </div>
         )}
 
-        <div 
+        <div
           ref={mainScrollRef}
           className="flex-1 overflow-y-auto bg-[radial-gradient(circle_at_50%_-20%,#1e1b4b_0%,transparent_50%)] print:bg-white print:overflow-visible relative"
         >
           {/* VERSION HISTORY SIDE PANEL (Refined slide-over) */}
-          <div 
+          <div
             className={`fixed inset-y-0 right-0 w-80 sm:w-96 z-[120] bg-slate-950/98 backdrop-blur-3xl border-l border-slate-800 shadow-[0_0_80px_rgba(0,0,0,0.9)] transition-transform duration-500 ease-in-out transform print:hidden flex flex-col
               ${showHistory ? 'translate-x-0' : 'translate-x-full'}
             `}
@@ -816,8 +835,8 @@ Use the Stage-Specific Reference URLs provided to gather deep technical or busin
                   <p className="text-[9px] text-slate-500 font-bold uppercase tracking-widest mt-2">{STAGE_CONFIGS[state.currentStage].title}</p>
                 </div>
               </div>
-              <button 
-                onClick={() => setShowHistory(false)} 
+              <button
+                onClick={() => setShowHistory(false)}
                 className="w-10 h-10 rounded-xl bg-slate-800/50 flex items-center justify-center text-slate-500 hover:text-white transition-all border border-slate-700/50 hover:border-slate-500"
               >
                 <i className="fas fa-times"></i>
@@ -838,12 +857,12 @@ Use the Stage-Specific Reference URLs provided to gather deep technical or busin
                   const isCurrent = currentStageData.output === version.output;
                   const iterNum = currentStageData.versions.length - idx;
                   const snapshot = version.output.replace(/[#*`\n]/g, ' ').trim().slice(0, 120);
-                  
+
                   return (
                     <div key={version.id} className="relative group animate-in slide-in-from-right-4 duration-500" style={{ animationDelay: `${idx * 0.05}s` }}>
                       <div className={`p-5 rounded-[1.5rem] border transition-all duration-300 relative overflow-hidden flex flex-col gap-3
-                        ${isCurrent 
-                          ? 'bg-indigo-600/5 border-indigo-500/40 shadow-xl shadow-indigo-500/5 ring-1 ring-indigo-500/20' 
+                        ${isCurrent
+                          ? 'bg-indigo-600/5 border-indigo-500/40 shadow-xl shadow-indigo-500/5 ring-1 ring-indigo-500/20'
                           : 'bg-slate-900/40 border-slate-800 hover:border-slate-600 hover:bg-slate-900/60 shadow-sm'}
                       `}>
                         {isCurrent && (
@@ -851,11 +870,11 @@ Use the Stage-Specific Reference URLs provided to gather deep technical or busin
                             Current Workbench
                           </div>
                         )}
-                        
+
                         <div className="flex items-center justify-between mb-1">
                           <div className="flex items-center gap-2">
-                             <div className={`w-2 h-2 rounded-full ${isCurrent ? 'bg-indigo-500 animate-pulse' : 'bg-slate-700'}`}></div>
-                             <span className={`text-[9px] font-black uppercase tracking-widest ${isCurrent ? 'text-indigo-400' : 'text-slate-500'}`}>Iteration 0{iterNum}</span>
+                            <div className={`w-2 h-2 rounded-full ${isCurrent ? 'bg-indigo-500 animate-pulse' : 'bg-slate-700'}`}></div>
+                            <span className={`text-[9px] font-black uppercase tracking-widest ${isCurrent ? 'text-indigo-400' : 'text-slate-500'}`}>Iteration 0{iterNum}</span>
                           </div>
                           <span className="text-[8px] text-slate-600 font-bold uppercase tracking-tighter">
                             {new Date(version.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
@@ -867,7 +886,7 @@ Use the Stage-Specific Reference URLs provided to gather deep technical or busin
                         </p>
 
                         {!isCurrent && (
-                          <button 
+                          <button
                             onClick={() => revertToVersion(version)}
                             className="w-full mt-2 py-2.5 rounded-xl bg-slate-800/80 border border-slate-700 text-[10px] font-black text-indigo-400 uppercase tracking-widest hover:bg-indigo-600 hover:text-white hover:border-indigo-400 transition-all flex items-center justify-center gap-2"
                           >
@@ -890,9 +909,9 @@ Use the Stage-Specific Reference URLs provided to gather deep technical or busin
           {!isMetadataComplete && (
             <div className="absolute inset-0 z-40 bg-slate-950/40 backdrop-blur-[2px]"></div>
           )}
-          
-          <div className="max-w-[1400px] mx-auto p-4 sm:p-6 lg:p-10 grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-12 items-stretch min-h-full print:block relative z-30">
-            
+
+          <div className="max-w-[1400px] mx-auto p-4 sm:p-5 lg:p-6 grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-12 items-stretch min-h-full print:block relative z-30">
+
             <div className="lg:col-span-5 xl:col-span-4 space-y-6 lg:space-y-8 flex flex-col print:hidden">
               <div className="glass rounded-[2.5rem] p-6 sm:p-8 shadow-2xl border-slate-700/50">
                 <div className="flex items-center justify-between mb-6">
@@ -906,7 +925,7 @@ Use the Stage-Specific Reference URLs provided to gather deep technical or busin
                     </button>
                   )}
                 </div>
-                
+
                 <textarea
                   value={currentStageData.input}
                   onChange={handleInputChange}
@@ -929,7 +948,7 @@ Use the Stage-Specific Reference URLs provided to gather deep technical or busin
                         className="w-full bg-slate-950/40 border border-slate-800 rounded-xl px-4 py-2.5 text-[11px] text-white outline-none focus:ring-2 focus:ring-indigo-500/40 focus:border-indigo-500/50 transition-all placeholder:text-slate-600"
                       />
                     </div>
-                    <button 
+                    <button
                       onClick={handleUrlAdd}
                       className="w-10 h-10 rounded-xl bg-slate-800 border border-slate-700 flex items-center justify-center text-slate-400 hover:text-indigo-400 hover:border-indigo-500/50 transition-all"
                     >
@@ -943,7 +962,7 @@ Use the Stage-Specific Reference URLs provided to gather deep technical or busin
                         <div key={idx} className="flex items-center gap-2 px-3 py-1.5 bg-indigo-500/10 border border-indigo-500/20 rounded-lg max-w-full">
                           <i className="fas fa-link text-[10px] text-indigo-400 shrink-0"></i>
                           <span className="text-[10px] font-bold text-slate-300 truncate max-w-[150px]">{url.replace(/^https?:\/\//, '')}</span>
-                          <button 
+                          <button
                             onClick={() => handleUrlRemove(url)}
                             className="text-slate-500 hover:text-rose-500 transition-colors ml-1 shrink-0"
                           >
@@ -979,7 +998,7 @@ Use the Stage-Specific Reference URLs provided to gather deep technical or busin
                                 <p className="text-[9px] text-slate-500 uppercase tracking-tighter">{(file.size / 1024).toFixed(1)} KB</p>
                               </div>
                             </div>
-                            <button 
+                            <button
                               onClick={() => removeFile(file.name)}
                               className="w-7 h-7 rounded-lg flex items-center justify-center text-slate-500 hover:text-rose-500 hover:bg-rose-500/10 transition-all opacity-0 group-hover:opacity-100"
                               title="Remove asset"
@@ -1005,14 +1024,14 @@ Use the Stage-Specific Reference URLs provided to gather deep technical or busin
                       ) : (
                         <div className="relative z-20">
                           <div className="w-10 h-10 bg-emerald-600/20 rounded-full flex items-center justify-center mx-auto mb-2">
-                             <i className="fas fa-check-circle text-emerald-400"></i>
+                            <i className="fas fa-check-circle text-emerald-400"></i>
                           </div>
                           <p className="text-[10px] font-bold text-emerald-400 uppercase tracking-widest mb-2">Reference Locked</p>
                           <div className="flex items-center justify-between gap-2 text-[9px] text-emerald-400 font-bold uppercase truncate px-3 py-1 bg-emerald-500/10 rounded-lg border border-emerald-500/20">
                             <span className="truncate">{currentStageData.formatReference.name}</span>
-                            <button 
+                            <button
                               type="button"
-                              onClick={(e) => { e.preventDefault(); e.stopPropagation(); removeFormatReference(); }} 
+                              onClick={(e) => { e.preventDefault(); e.stopPropagation(); removeFormatReference(); }}
                               className="text-emerald-500 hover:text-rose-500 transition-colors p-1 ml-2 relative z-30 pointer-events-auto"
                               title="Remove reference"
                             >
@@ -1037,11 +1056,11 @@ Use the Stage-Specific Reference URLs provided to gather deep technical or busin
                       </div>
                     </div>
                     <label className="relative inline-flex items-center cursor-pointer">
-                      <input 
-                        type="checkbox" 
-                        className="sr-only peer" 
-                        checked={isThinkingEnabled} 
-                        onChange={(e) => setIsThinkingEnabled(e.target.checked)} 
+                      <input
+                        type="checkbox"
+                        className="sr-only peer"
+                        checked={isThinkingEnabled}
+                        onChange={(e) => setIsThinkingEnabled(e.target.checked)}
                       />
                       <div className="w-11 h-6 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
                     </label>
@@ -1058,11 +1077,11 @@ Use the Stage-Specific Reference URLs provided to gather deep technical or busin
                       </div>
                     </div>
                     <label className="relative inline-flex items-center cursor-pointer">
-                      <input 
-                        type="checkbox" 
-                        className="sr-only peer" 
-                        checked={isSearchEnabled} 
-                        onChange={(e) => setIsSearchEnabled(e.target.checked)} 
+                      <input
+                        type="checkbox"
+                        className="sr-only peer"
+                        checked={isSearchEnabled}
+                        onChange={(e) => setIsSearchEnabled(e.target.checked)}
                       />
                       <div className="w-11 h-6 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-amber-600"></div>
                     </label>
@@ -1082,47 +1101,56 @@ Use the Stage-Specific Reference URLs provided to gather deep technical or busin
                 )}
               </div>
 
-              {currentStageData.questions.length > 0 && (
-                <div className={`glass rounded-[2rem] p-6 sm:p-8 border animate-in slide-in-from-left-6 duration-700 shadow-xl space-y-6 sm:space-y-8
-                  ${voice.isActive ? 'border-indigo-500/30 bg-indigo-500/10' : 'border-indigo-500/20 bg-indigo-500/5'}
-                `}>
-                  <div>
-                    <div className="flex items-center gap-3 mb-6">
-                      <div className="w-8 h-8 bg-indigo-500/20 rounded-lg flex items-center justify-center"><i className="fas fa-lightbulb text-indigo-400 text-sm"></i></div>
+              {currentStageData.output && (
+                <div className="flex flex-col gap-6 animate-in slide-in-from-bottom-4 duration-700">
+                  {currentStageData.questions.length > 0 && (
+                    <div className={`glass rounded-[2rem] p-6 sm:p-8 border shadow-xl space-y-6 sm:space-y-8
+                      ${voice.isActive ? 'border-indigo-500/30 bg-indigo-500/10' : 'border-indigo-500/20 bg-indigo-500/5'}
+                    `}>
                       <div>
-                        <h3 className="text-xs font-black text-indigo-400 uppercase tracking-widest">Stage Refinement</h3>
-                        <p className="text-[10px] text-slate-500 mt-1 uppercase tracking-tighter">AI Needs Clarity</p>
-                      </div>
-                    </div>
-                    <div className="space-y-6">
-                      {currentStageData.questions.map((q, i) => (
-                        <div key={i} className="group">
-                          <label className="block text-[10px] font-bold text-slate-400 mb-2 leading-relaxed opacity-70 group-hover:opacity-100 transition-opacity">{q}</label>
-                          <textarea
-                            rows={2}
-                            value={currentStageData.answers[i.toString()] || ''}
-                            onChange={(e) => handleAnswerChange(i, e.target.value)}
-                            className={`w-full bg-slate-950/60 border rounded-xl p-3 text-[11px] text-white outline-none focus:ring-4 focus:ring-indigo-500/5 transition-all resize-none font-medium
-                              ${voice.isActive ? 'border-indigo-500/40 shadow-[0_0_10px_rgba(99,102,241,0.1)]' : 'border-slate-800 focus:border-indigo-500/50'}
-                            `}
-                            placeholder="Provide details..."
-                          />
+                        <div className="flex items-center gap-3 mb-6">
+                          <div className="w-8 h-8 bg-indigo-500/20 rounded-lg flex items-center justify-center"><i className="fas fa-lightbulb text-indigo-400 text-sm"></i></div>
+                          <div>
+                            <h3 className="text-xs font-black text-indigo-400 uppercase tracking-widest">Stage Refinement</h3>
+                            <p className="text-[10px] text-slate-500 mt-1 uppercase tracking-tighter">AI Needs Clarity</p>
+                          </div>
                         </div>
-                      ))}
-                    </div>
-                  </div>
-
-                  {currentStageData.output && (
-                    <button
-                      onClick={runAnalysis}
-                      disabled={!!analyzingStage}
-                      className="w-full py-4 sm:py-5 btn-grad rounded-2xl text-[11px] sm:text-[12px] font-black uppercase tracking-[0.2em] flex items-center justify-center disabled:opacity-30 disabled:cursor-not-allowed"
-                    >
-                      <div className="flex items-center gap-2.5">
-                        {analyzingStage === state.currentStage ? <div className="w-5 h-5 border-2 border-white/20 border-t-white rounded-full animate-spin"></div> : <><i className="fas fa-rotate text-[13px] translate-y-[0.5px]"></i><span>Re-Analyze Stage</span></>}
+                        <div className="space-y-6">
+                          {currentStageData.questions.map((q, i) => (
+                            <div key={i} className="group">
+                              <label className="block text-[10px] font-bold text-slate-400 mb-2 leading-relaxed opacity-70 group-hover:opacity-100 transition-opacity">{q}</label>
+                              <textarea
+                                rows={2}
+                                value={currentStageData.answers[i.toString()] || ''}
+                                onChange={(e) => handleAnswerChange(i, e.target.value)}
+                                className={`w-full bg-slate-950/60 border rounded-xl p-3 text-[11px] text-white outline-none focus:ring-4 focus:ring-indigo-500/5 transition-all resize-none font-medium
+                                  ${voice.isActive ? 'border-indigo-500/40 shadow-[0_0_10px_rgba(99,102,241,0.1)]' : 'border-slate-800 focus:border-indigo-500/50'}
+                                `}
+                                placeholder="Provide details..."
+                              />
+                            </div>
+                          ))}
+                        </div>
                       </div>
-                    </button>
+                    </div>
                   )}
+
+                  <button
+                    onClick={runAnalysis}
+                    disabled={!!analyzingStage}
+                    className="w-full py-4 sm:py-5 btn-grad rounded-2xl text-[11px] sm:text-[12px] font-black uppercase tracking-[0.2em] flex items-center justify-center disabled:opacity-30 disabled:cursor-not-allowed shadow-xl shadow-indigo-500/10"
+                  >
+                    <div className="flex items-center gap-2.5">
+                      {analyzingStage === state.currentStage ? (
+                        <div className="w-5 h-5 border-2 border-white/20 border-t-white rounded-full animate-spin"></div>
+                      ) : (
+                        <>
+                          <i className="fas fa-rotate text-sm translate-y-[0.5px]"></i>
+                          <span>{config.regenerateCta || 'Re-Analyze Stage'}</span>
+                        </>
+                      )}
+                    </div>
+                  </button>
                 </div>
               )}
             </div>
@@ -1134,27 +1162,27 @@ Use the Stage-Specific Reference URLs provided to gather deep technical or busin
                   <div className="report-card !p-6 sm:!p-8 bg-indigo-600/5 border-indigo-500/20 mb-8 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-6">
                     <div className="flex items-center gap-5">
                       <div className="w-14 h-14 bg-indigo-600 rounded-2xl flex items-center justify-center shadow-2xl shadow-indigo-600/40 shrink-0">
-                         <i className="fas fa-shield-halved text-white text-xl"></i>
+                        <i className="fas fa-shield-halved text-white text-xl"></i>
                       </div>
                       <div className="min-w-0">
                         <h4 className="text-base font-black text-white uppercase tracking-tighter leading-none mb-1">Discovery Analysis Brief</h4>
                         <div className="flex items-center gap-3 mt-2 flex-wrap">
-                           <span className="text-[9px] font-black text-indigo-400 uppercase tracking-widest py-1 px-2 bg-indigo-500/10 rounded-md border border-indigo-500/20">Agent: {STAGE_CONFIGS[state.currentStage].agentName}</span>
-                           <span className="text-[9px] font-black text-slate-500 uppercase tracking-widest py-1 px-2 bg-slate-800/40 rounded-md">ID: {state.currentStage}-742</span>
-                           <span className="text-[9px] font-black text-emerald-500 uppercase tracking-widest py-1 px-2 bg-emerald-500/10 rounded-md border border-emerald-500/20">Verified</span>
+                          <span className="text-[9px] font-black text-indigo-400 uppercase tracking-widest py-1 px-2 bg-indigo-500/10 rounded-md border border-indigo-500/20">Agent: {STAGE_CONFIGS[state.currentStage].agentName}</span>
+                          <span className="text-[9px] font-black text-slate-500 uppercase tracking-widest py-1 px-2 bg-slate-800/40 rounded-md">ID: {state.currentStage}-742</span>
+                          <span className="text-[9px] font-black text-emerald-500 uppercase tracking-widest py-1 px-2 bg-emerald-500/10 rounded-md border border-emerald-500/20">Verified</span>
                         </div>
                       </div>
                     </div>
-                    
+
                     <div className="flex flex-col items-end gap-2 w-full sm:w-auto border-t sm:border-t-0 border-slate-800 pt-4 sm:pt-0 group relative">
-                       <div className="flex items-center gap-2">
-                          <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest cursor-help border-b border-dashed border-slate-700" title="Calculated based on Baseline Completeness, Input Depth, and Intelligence Leverage.">Coherence</span>
-                          <div className="w-32 h-1.5 bg-slate-800 rounded-full overflow-hidden">
-                             <div className="h-full bg-indigo-500 transition-all duration-[1.5s] ease-out" style={{ width: `${currentStageData.coherenceScore}%` }}></div>
-                          </div>
-                          <span className="text-[10px] font-black text-white uppercase tracking-widest ml-1">{currentStageData.coherenceScore}%</span>
-                       </div>
-                       <p className="text-[9px] text-slate-500 font-bold uppercase tracking-[0.2em]">{new Date().toLocaleDateString()} @ {new Date().toLocaleTimeString()}</p>
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest cursor-help border-b border-dashed border-slate-700" title="Calculated based on Baseline Completeness, Input Depth, and Intelligence Leverage.">Coherence</span>
+                        <div className="w-32 h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                          <div className="h-full bg-indigo-500 transition-all duration-[1.5s] ease-out" style={{ width: `${currentStageData.coherenceScore}%` }}></div>
+                        </div>
+                        <span className="text-[10px] font-black text-white uppercase tracking-widest ml-1">{currentStageData.coherenceScore}%</span>
+                      </div>
+                      <p className="text-[9px] text-slate-500 font-bold uppercase tracking-[0.2em]">{new Date().toLocaleDateString()} @ {new Date().toLocaleTimeString()}</p>
                     </div>
                   </div>
 
@@ -1163,10 +1191,10 @@ Use the Stage-Specific Reference URLs provided to gather deep technical or busin
                     {structuredBlocks.map((block, idx) => (
                       <div key={idx} className="report-card animate-in fade-in slide-in-from-bottom-4 duration-700" style={{ animationDelay: `${idx * 0.1}s` }}>
                         <div className="flex justify-between items-start mb-6 -mt-2">
-                           <span className="text-[9px] font-black text-slate-600 uppercase tracking-[0.4em]">Section 0{idx + 1}</span>
-                           <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                              <button className="text-slate-500 hover:text-indigo-400 p-1 transition-colors"><i className="fas fa-copy text-xs"></i></button>
-                           </div>
+                          <span className="text-[9px] font-black text-slate-600 uppercase tracking-[0.4em]">Section 0{idx + 1}</span>
+                          <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <button className="text-slate-500 hover:text-indigo-400 p-1 transition-colors"><i className="fas fa-copy text-xs"></i></button>
+                          </div>
                         </div>
                         <MarkdownRenderer content={block} />
                       </div>
@@ -1187,7 +1215,7 @@ Use the Stage-Specific Reference URLs provided to gather deep technical or busin
                           </div>
                         </div>
                         <div className="px-3 py-1 rounded-full bg-amber-500/10 border border-amber-500/20 text-[8px] font-black text-amber-400 uppercase tracking-widest flex items-center gap-2">
-                           <i className="fas fa-check-double"></i> Verified Research Session
+                          <i className="fas fa-check-double"></i> Verified Research Session
                         </div>
                       </div>
 
@@ -1221,7 +1249,7 @@ Use the Stage-Specific Reference URLs provided to gather deep technical or busin
                             </div>
                           </div>
                         )}
-                        
+
                         {/* 3. GROUNDED CITATIONS (The Results) */}
                         <div className="space-y-6">
                           <div className="flex items-center justify-between">
@@ -1231,14 +1259,14 @@ Use the Stage-Specific Reference URLs provided to gather deep technical or busin
                             </div>
                             <span className="text-[9px] font-bold text-slate-600 uppercase tracking-widest">Validated Sources</span>
                           </div>
-                          
+
                           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                             {/* Grounding Sources (from Search) */}
                             {currentStageData.groundingSources?.map((source, idx) => (
-                              <a 
-                                key={`ground-${idx}`} 
-                                href={source.uri} 
-                                target="_blank" 
+                              <a
+                                key={`ground-${idx}`}
+                                href={source.uri}
+                                target="_blank"
                                 rel="noopener noreferrer"
                                 className="flex items-center gap-5 p-5 rounded-2xl bg-slate-950/60 border border-slate-800/80 hover:border-amber-500/50 hover:bg-amber-500/10 transition-all group relative overflow-hidden"
                               >
@@ -1248,8 +1276,8 @@ Use the Stage-Specific Reference URLs provided to gather deep technical or busin
                                 <div className="min-w-0 flex-1">
                                   <p className="text-[12px] font-bold text-slate-200 truncate group-hover:text-amber-400 transition-colors mb-0.5">{source.title}</p>
                                   <p className="text-[9px] text-slate-600 truncate font-bold uppercase tracking-widest flex items-center gap-2">
-                                     <span className="opacity-50">{new URL(source.uri).hostname}</span>
-                                     <i className="fas fa-external-link text-[8px]"></i>
+                                    <span className="opacity-50">{new URL(source.uri).hostname}</span>
+                                    <i className="fas fa-external-link text-[8px]"></i>
                                   </p>
                                 </div>
                                 <div className="absolute top-2 right-2 px-1.5 py-0.5 rounded-md bg-amber-500/10 text-[7px] font-black text-amber-400 uppercase tracking-tighter opacity-0 group-hover:opacity-100 transition-opacity">Grounding</div>
@@ -1258,10 +1286,10 @@ Use the Stage-Specific Reference URLs provided to gather deep technical or busin
 
                             {/* Manual Reference URLs (from sidebar) */}
                             {currentStageData.urls?.map((url, idx) => (
-                              <a 
-                                key={`manual-${idx}`} 
-                                href={url} 
-                                target="_blank" 
+                              <a
+                                key={`manual-${idx}`}
+                                href={url}
+                                target="_blank"
                                 rel="noopener noreferrer"
                                 className="flex items-center gap-5 p-5 rounded-2xl bg-slate-950/60 border border-slate-800/80 hover:border-indigo-500/50 hover:bg-indigo-500/10 transition-all group relative overflow-hidden"
                               >
@@ -1271,8 +1299,8 @@ Use the Stage-Specific Reference URLs provided to gather deep technical or busin
                                 <div className="min-w-0 flex-1">
                                   <p className="text-[12px] font-bold text-slate-200 truncate group-hover:text-indigo-400 transition-colors mb-0.5">{url.replace(/^https?:\/\//, '')}</p>
                                   <p className="text-[9px] text-slate-600 truncate font-bold uppercase tracking-widest flex items-center gap-2">
-                                     <span className="opacity-50">{new URL(url).hostname}</span>
-                                     <i className="fas fa-external-link text-[8px]"></i>
+                                    <span className="opacity-50">{new URL(url).hostname}</span>
+                                    <i className="fas fa-external-link text-[8px]"></i>
                                   </p>
                                 </div>
                                 <div className="absolute top-2 right-2 px-1.5 py-0.5 rounded-md bg-indigo-500/10 text-[7px] font-black text-indigo-400 uppercase tracking-tighter opacity-0 group-hover:opacity-100 transition-opacity">Manual Ref</div>
@@ -1294,36 +1322,36 @@ Use the Stage-Specific Reference URLs provided to gather deep technical or busin
                   {/* Decorative Elements for Empty State */}
                   <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(99,102,241,0.05)_0%,transparent_70%)]"></div>
                   <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[500px] h-[500px] bg-indigo-500/5 rounded-full blur-[100px] opacity-0 group-hover:opacity-100 transition-opacity duration-1000"></div>
-                  
+
                   <div className="relative z-10 flex flex-col items-center">
                     <div className="w-24 h-24 sm:w-32 sm:h-32 mb-10 relative">
-                       <div className="absolute inset-0 border-2 border-slate-800 rounded-[2.5rem] rotate-45 group-hover:rotate-[225deg] group-hover:border-indigo-500/30 transition-all duration-[2s]"></div>
-                       <div className="absolute inset-2 border-2 border-slate-800 rounded-[2.2rem] -rotate-12 group-hover:rotate-12 group-hover:border-indigo-500/20 transition-all duration-[2.5s]"></div>
-                       <div className="absolute inset-0 flex items-center justify-center">
-                          <i className="fas fa-microchip text-4xl text-slate-800 group-hover:text-indigo-500 group-hover:scale-110 transition-all duration-700"></i>
-                       </div>
+                      <div className="absolute inset-0 border-2 border-slate-800 rounded-[2.5rem] rotate-45 group-hover:rotate-[225deg] group-hover:border-indigo-500/30 transition-all duration-[2s]"></div>
+                      <div className="absolute inset-2 border-2 border-slate-800 rounded-[2.2rem] -rotate-12 group-hover:rotate-12 group-hover:border-indigo-500/20 transition-all duration-[2.5s]"></div>
+                      <div className="absolute inset-0 flex items-center justify-center">
+                        <i className="fas fa-microchip text-4xl text-slate-800 group-hover:text-indigo-500 group-hover:scale-110 transition-all duration-700"></i>
+                      </div>
                     </div>
-                    
+
                     <h3 className="text-2xl sm:text-3xl font-black text-white mb-4 tracking-tighter uppercase">Workbench Terminal</h3>
                     <p className="max-w-md text-slate-400 leading-relaxed text-[13px] font-medium opacity-60 px-6">
                       System standing by. Provide strategic context in the left panel to initialize the <span className="text-indigo-400 font-bold">{config.title}</span> processing engine.
                     </p>
-                    
+
                     <div className="mt-12 flex gap-10 items-center opacity-30">
-                       <div className="flex flex-col items-center gap-1">
-                          <span className="text-[10px] font-black uppercase tracking-widest">Latency</span>
-                          <span className="text-xs font-bold text-white">2.4ms</span>
-                       </div>
-                       <div className="h-8 w-px bg-slate-800"></div>
-                       <div className="flex flex-col items-center gap-1">
-                          <span className="text-[10px] font-black uppercase tracking-widest">Model</span>
-                          <span className="text-xs font-bold text-white">G3 PRO</span>
-                       </div>
-                       <div className="h-8 w-px bg-slate-800"></div>
-                       <div className="flex flex-col items-center gap-1">
-                          <span className="text-[10px] font-black uppercase tracking-widest">Status</span>
-                          <span className="text-xs font-bold text-emerald-500">READY</span>
-                       </div>
+                      <div className="flex flex-col items-center gap-1">
+                        <span className="text-[10px] font-black uppercase tracking-widest">Latency</span>
+                        <span className="text-xs font-bold text-white">2.4ms</span>
+                      </div>
+                      <div className="h-8 w-px bg-slate-800"></div>
+                      <div className="flex flex-col items-center gap-1">
+                        <span className="text-[10px] font-black uppercase tracking-widest">Model</span>
+                        <span className="text-xs font-bold text-white">G3 PRO</span>
+                      </div>
+                      <div className="h-8 w-px bg-slate-800"></div>
+                      <div className="flex flex-col items-center gap-1">
+                        <span className="text-[10px] font-black uppercase tracking-widest">Status</span>
+                        <span className="text-xs font-bold text-emerald-500">READY</span>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -1350,19 +1378,19 @@ Use the Stage-Specific Reference URLs provided to gather deep technical or busin
                 </div>
               </div>
             </div>
-            
+
             <h4 className="text-2xl sm:text-3xl font-black text-white mb-4 tracking-tighter uppercase">
               {STAGE_CONFIGS[analyzingStage]?.agentName || 'Agent Processing'}
             </h4>
-            
+
             <div className="h-10">
               <p className="text-indigo-400 text-sm sm:text-base font-bold tracking-[0.2em] animate-pulse uppercase">
                 {STAGE_CONFIGS[analyzingStage]?.statusMessages[statusIdx] || 'Synthesizing context...'}
               </p>
             </div>
-            
+
             <div className="mt-12 w-48 h-1 bg-slate-900 rounded-full overflow-hidden">
-               <div className="h-full bg-indigo-500 animate-[progress_10s_linear_infinite]"></div>
+              <div className="h-full bg-indigo-500 animate-[progress_10s_linear_infinite]"></div>
             </div>
           </div>
         </div>
@@ -1372,28 +1400,28 @@ Use the Stage-Specific Reference URLs provided to gather deep technical or busin
         <div className="fixed inset-0 z-[110] bg-black/80 backdrop-blur-xl flex items-center justify-center p-4">
           <div className="bg-slate-900 border border-slate-800 rounded-[3rem] w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col shadow-2xl animate-in zoom-in-95 duration-300">
             <div className="p-8 sm:p-12 border-b border-slate-800 flex justify-between items-center bg-slate-900/60">
-               <div className="flex-1 pr-6">
-                  <h2 className="text-3xl font-black text-white uppercase tracking-tighter mb-1">Strategic Baseline</h2>
-                  <p className="text-xs text-indigo-400 font-bold uppercase tracking-[0.2em]">Mandatory Project Context</p>
-               </div>
-               
-               <div className="flex items-center gap-4 shrink-0 border-l border-slate-800 pl-8">
-                 <div className="w-14 h-14 bg-indigo-600 rounded-2xl flex items-center justify-center shadow-2xl shadow-indigo-600/40">
-                   <i className="fas fa-layer-group text-white text-2xl"></i>
-                 </div>
-                 <div className="hidden sm:block">
-                   <div className="text-base font-black text-white tracking-tighter uppercase leading-none">DISCOVERY PRO</div>
-                   <div className="text-[10px] text-indigo-400 font-bold tracking-[0.15em] mt-2 uppercase opacity-80">PRSIM.AI Material +</div>
-                 </div>
-               </div>
+              <div className="flex-1 pr-6">
+                <h2 className="text-3xl font-black text-white uppercase tracking-tighter mb-1">Strategic Baseline</h2>
+                <p className="text-xs text-indigo-400 font-bold uppercase tracking-[0.2em]">Mandatory Project Context</p>
+              </div>
+
+              <div className="flex items-center gap-4 shrink-0 border-l border-slate-800 pl-8">
+                <div className="w-14 h-14 bg-indigo-600 rounded-2xl flex items-center justify-center shadow-2xl shadow-indigo-600/40">
+                  <i className="fas fa-layer-group text-white text-2xl"></i>
+                </div>
+                <div className="hidden sm:block">
+                  <div className="text-base font-black text-white tracking-tighter uppercase leading-none">DISCOVERY PRO</div>
+                  <div className="text-[10px] text-indigo-400 font-bold tracking-[0.15em] mt-2 uppercase opacity-80">PRSIM.AI Material +</div>
+                </div>
+              </div>
             </div>
-            
+
             <div className="flex-1 overflow-y-auto p-8 sm:p-12 space-y-10">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                 <div className="space-y-3">
                   <label className="text-[11px] font-black uppercase tracking-widest text-slate-500">Company Name *</label>
-                  <input 
-                    type="text" 
+                  <input
+                    type="text"
                     value={state.projectMetadata.companyName}
                     onChange={(e) => handleMetadataChange('companyName', e.target.value)}
                     className="w-full bg-slate-950/60 border border-slate-800 rounded-2xl p-4 sm:p-5 text-sm text-white focus:ring-2 focus:ring-indigo-500/40 outline-none transition-all"
@@ -1402,8 +1430,8 @@ Use the Stage-Specific Reference URLs provided to gather deep technical or busin
                 </div>
                 <div className="space-y-3">
                   <label className="text-[11px] font-black uppercase tracking-widest text-slate-500">Target Vertical *</label>
-                  <input 
-                    type="text" 
+                  <input
+                    type="text"
                     value={state.projectMetadata.targetVertical}
                     onChange={(e) => handleMetadataChange('targetVertical', e.target.value)}
                     className="w-full bg-slate-950/60 border border-slate-800 rounded-2xl p-4 sm:p-5 text-sm text-white focus:ring-2 focus:ring-indigo-500/40 outline-none transition-all"
@@ -1412,8 +1440,8 @@ Use the Stage-Specific Reference URLs provided to gather deep technical or busin
                 </div>
                 <div className="space-y-3">
                   <label className="text-[11px] font-black uppercase tracking-widest text-slate-500">Geography *</label>
-                  <input 
-                    type="text" 
+                  <input
+                    type="text"
                     value={state.projectMetadata.geography}
                     onChange={(e) => handleMetadataChange('geography', e.target.value)}
                     className="w-full bg-slate-950/60 border border-slate-800 rounded-2xl p-4 sm:p-5 text-sm text-white focus:ring-2 focus:ring-indigo-500/40 outline-none transition-all"
@@ -1422,8 +1450,8 @@ Use the Stage-Specific Reference URLs provided to gather deep technical or busin
                 </div>
                 <div className="space-y-3">
                   <label className="text-[11px] font-black uppercase tracking-widest text-slate-500">TAM / Market Focus *</label>
-                  <input 
-                    type="text" 
+                  <input
+                    type="text"
                     value={state.projectMetadata.tam}
                     onChange={(e) => handleMetadataChange('tam', e.target.value)}
                     className="w-full bg-slate-950/60 border border-slate-800 rounded-2xl p-4 sm:p-5 text-sm text-white focus:ring-2 focus:ring-indigo-500/40 outline-none transition-all"
@@ -1432,8 +1460,8 @@ Use the Stage-Specific Reference URLs provided to gather deep technical or busin
                 </div>
                 <div className="space-y-3">
                   <label className="text-[11px] font-black uppercase tracking-widest text-slate-500">Revenue Model *</label>
-                  <input 
-                    type="text" 
+                  <input
+                    type="text"
                     value={state.projectMetadata.revenueModel}
                     onChange={(e) => handleMetadataChange('revenueModel', e.target.value)}
                     className="w-full bg-slate-950/60 border border-slate-800 rounded-2xl p-4 sm:p-5 text-sm text-white focus:ring-2 focus:ring-indigo-500/40 outline-none transition-all"
@@ -1442,8 +1470,8 @@ Use the Stage-Specific Reference URLs provided to gather deep technical or busin
                 </div>
                 <div className="space-y-3">
                   <label className="text-[11px] font-black uppercase tracking-widest text-slate-500">Web Presence / References *</label>
-                  <input 
-                    type="text" 
+                  <input
+                    type="text"
                     value={state.projectMetadata.websiteUrls}
                     onChange={(e) => handleMetadataChange('websiteUrls', e.target.value)}
                     className="w-full bg-slate-950/60 border border-slate-800 rounded-2xl p-4 sm:p-5 text-sm text-white focus:ring-2 focus:ring-indigo-500/40 outline-none transition-all"
@@ -1451,10 +1479,10 @@ Use the Stage-Specific Reference URLs provided to gather deep technical or busin
                   />
                 </div>
               </div>
-              
+
               <div className="space-y-3">
                 <label className="text-[11px] font-black uppercase tracking-widest text-slate-500">Competitive Benchmark *</label>
-                <textarea 
+                <textarea
                   rows={2}
                   value={state.projectMetadata.keyCompetitors}
                   onChange={(e) => handleMetadataChange('keyCompetitors', e.target.value)}
@@ -1465,7 +1493,7 @@ Use the Stage-Specific Reference URLs provided to gather deep technical or busin
 
               <div className="space-y-3">
                 <label className="text-[11px] font-black uppercase tracking-widest text-slate-500">Core Mission</label>
-                <textarea 
+                <textarea
                   rows={3}
                   value={state.projectMetadata.missionStatement}
                   onChange={(e) => handleMetadataChange('missionStatement', e.target.value)}
@@ -1476,23 +1504,23 @@ Use the Stage-Specific Reference URLs provided to gather deep technical or busin
             </div>
 
             <div className="p-8 sm:p-12 border-t border-slate-800 bg-slate-950/40 flex flex-col sm:flex-row justify-between items-center gap-8">
-               <p className="text-[11px] font-bold text-slate-500 uppercase tracking-widest">
-                 {!isMetadataComplete ? <span className="text-rose-500">* All starred fields required</span> : <span className="text-emerald-500 flex items-center gap-2"><i className="fas fa-check"></i> Strategy Locked</span>}
-               </p>
-               <button 
-                 onClick={() => isMetadataComplete && setShowProjectConfig(false)}
-                 disabled={!isMetadataComplete}
-                 className="w-full sm:w-auto px-16 py-5 btn-grad rounded-[2rem] text-[12px] font-black uppercase tracking-[0.25em] disabled:opacity-30 transition-all hover:px-20"
-               >
-                 Launch Workbench
-               </button>
+              <p className="text-[11px] font-bold text-slate-500 uppercase tracking-widest">
+                {!isMetadataComplete ? <span className="text-rose-500">* All starred fields required</span> : <span className="text-emerald-500 flex items-center gap-2"><i className="fas fa-check"></i> Strategy Locked</span>}
+              </p>
+              <button
+                onClick={() => isMetadataComplete && setShowProjectConfig(false)}
+                disabled={!isMetadataComplete}
+                className="w-full sm:w-auto px-16 py-5 btn-grad rounded-[2rem] text-[12px] font-black uppercase tracking-[0.25em] disabled:opacity-30 transition-all hover:px-20"
+              >
+                Launch Workbench
+              </button>
             </div>
           </div>
         </div>
       )}
 
       {isPresenting && (
-        <PresentationView 
+        <PresentationView
           title={currentStageData.input.slice(0, 50) + "..."}
           stageName={config.title}
           content={currentStageData.output}
@@ -1505,7 +1533,7 @@ Use the Stage-Specific Reference URLs provided to gather deep technical or busin
       )}
 
       <ChatBot appState={state} />
-      
+
       <style>{`
         @keyframes progress {
            0% { transform: translateX(-100%); }
