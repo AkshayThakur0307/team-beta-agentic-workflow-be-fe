@@ -18,8 +18,10 @@ export async function callGroqAgent(
 ): Promise<GroqAgentResponse> {
 
     if (!process.env.GROQ_API_KEY) {
+        console.error("GROQ_API_KEY is missing from environment variables.");
         throw new Error("Missing GROQ_API_KEY in environment variables.");
     }
+    console.log("GROQ_API_KEY is present.");
 
     const groq = new Groq({ apiKey: process.env.GROQ_API_KEY, dangerouslyAllowBrowser: true });
 
@@ -49,30 +51,50 @@ ${systemInstruction}`
     let searchSources: GroundingSource[] = [];
 
     // RESEARCH GROUNDING LOGIC
-    if (useSearch && !hasMultimodal) { // Only search for text-based queries for now
+    console.log("Research Grounding Check:", { useSearch, hasMultimodal, hasApiKey: !!process.env.SERPER_API_KEY });
+    if (useSearch) {
         try {
             // 1. Generate optimized search query if search is enabled
-            console.log("Synthesizing Search Query using GPT-OSS-120B...");
+            console.log("Synthesizing Search Query using Llama-3.3-70B...");
+
+            // Truncate userPrompt for search synthesis to avoid context limits and keep it focused
+            const searchSynthesisPrompt = userPrompt.length > 2000
+                ? userPrompt.slice(0, 2000) + "... [Truncated for search synthesis]"
+                : userPrompt;
+
+            console.log("Search Synthesis Prompt Snapshot:", searchSynthesisPrompt.slice(0, 500) + "...");
+
             const queryResponse = await groq.chat.completions.create({
-                model: 'openai/gpt-oss-120b',
+                model: 'llama-3.3-70b-versatile',
                 messages: [
                     {
                         role: 'system',
-                        content: 'You are a research assistant. Generate a single, highly effective Google search query to find the latest market data, trends, or technical specs for the user prompt. Return ONLY the search query string, nothing else.'
+                        content: 'You are a professional research engine. Your task is to extract the core business intent from the user prompt and generate a single, high-impact Google search query. Even if the prompt is brief, generate a query to find relevant market trends or competitors. Output ONLY the query string. Do not use quotes or explanations.'
                     },
-                    { role: 'user', content: userPrompt }
+                    { role: 'user', content: searchSynthesisPrompt }
                 ],
-                temperature: 0.1,
+                temperature: 0.3, // Slightly higher for better query variety
                 max_tokens: 100,
             });
 
-            const query = queryResponse.choices[0]?.message?.content?.trim();
-            if (query) {
-                console.log("Generated Search Query:", query);
+            console.log("Raw Query Response Choices:", JSON.stringify(queryResponse.choices));
+
+            // Improved cleaning: remove quotes, trailing dots, and markdown code blocks
+            let query = queryResponse.choices[0]?.message?.content?.trim() || "";
+            query = query.replace(/^["'`]|["'`]$/g, '') // Remove outer quotes
+                .replace(/^Query:\s*/i, '')     // Remove "Query: " prefix if added
+                .replace(/[\.\?]$/, '')         // Remove trailing punctuation
+                .trim();
+
+            console.log("Research Assistant Response:", query);
+
+            if (query && query.length > 3 && !query.toUpperCase().includes('NONE')) {
+                console.log("Executing Serper Search for:", query);
                 // 2. Perform Search
                 const searchResults = await searchGoogle(query);
 
                 if (searchResults.text) {
+                    console.log("Search results found and being injected.");
                     // 3. Inject Results
                     searchSources = searchResults.sources;
                     const searchContext = `
@@ -81,12 +103,15 @@ ${searchResults.text}
 =============================================
 `;
                     // Prepend search context to system instruction or user prompt
-                    // Adding to user prompt ensures it's seen as fresh context
                     userPrompt = `${searchContext}\n\n${userPrompt}`;
+                } else {
+                    console.log("Search executed but no snippets returned.");
                 }
+            } else {
+                console.log("Search skipped: Query was empty, too short, or 'NONE'.");
             }
-        } catch (e) {
-            console.error("Research step failed:", e);
+        } catch (e: any) {
+            console.error("Research step failed with error:", e);
             // Proceed without search
         }
     }

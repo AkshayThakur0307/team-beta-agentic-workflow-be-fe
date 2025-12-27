@@ -1254,7 +1254,9 @@ Use the Stage-Specific Reference URLs provided to gather deep technical or busin
                         <div className="space-y-6">
                           <div className="flex items-center justify-between">
                             <div className="flex items-center gap-3">
-                              <span className="w-6 h-6 rounded-full bg-amber-500/20 border border-amber-500/30 flex items-center justify-center text-[10px] font-black text-amber-400">3</span>
+                              <span className="w-6 h-6 rounded-full bg-amber-500/20 border border-amber-500/30 flex items-center justify-center text-[10px] font-black text-amber-400">
+                                {(currentStageData.groundingSources?.length || 0) + (currentStageData.urls?.length || 0)}
+                              </span>
                               <h6 className="text-[10px] font-black uppercase tracking-widest text-slate-400">Intelligence Evidence & Results</h6>
                             </div>
                             <span className="text-[9px] font-bold text-slate-600 uppercase tracking-widest">Validated Sources</span>

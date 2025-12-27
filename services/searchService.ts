@@ -2,8 +2,9 @@
 import { GroundingSource } from "../types";
 
 export async function searchGoogle(query: string): Promise<{ text: string, sources: GroundingSource[] }> {
+    console.log("searchGoogle called with query:", query);
     if (!process.env.SERPER_API_KEY) {
-        console.warn("SERPER_API_KEY mismatch or missing. Skipping search.");
+        console.warn("SERPER_API_KEY mismatch or missing. Skipping search. process.env.SERPER_API_KEY is:", process.env.SERPER_API_KEY);
         return { text: "", sources: [] };
     }
 
