@@ -3,10 +3,10 @@ import DOMPurify from 'dompurify';
 
 export async function scrapeUrl(url: string): Promise<string> {
     try {
-        // Use a public CORS proxy to bypass browser restrictions
-        console.log(`Scraping URL via AllOrigins: ${url}`);
+        // Switching back to corsproxy.io for better Cloudflare production compatibility
+        console.log(`Scraping URL via CorsProxy: ${url}`);
 
-        const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`;
+        const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(url)}`;
 
         const response = await fetch(proxyUrl);
         console.log(`Proxy response status: ${response.status} ${response.statusText}`);
@@ -17,12 +17,11 @@ export async function scrapeUrl(url: string): Promise<string> {
             throw new Error(`Failed to fetch URL via proxy: ${response.status} ${response.statusText}`);
         }
 
-        const data = await response.json();
-        const html = data.contents;
+        const html = await response.text();
 
         if (!html || html.length < 100) {
             console.warn("Proxy returned suspiciously short or empty content.");
-            throw new Error("No substantial content returned from AllOrigins proxy.");
+            throw new Error("No substantial content returned from CorsProxy.");
         }
 
         // 1. Sanitize the HTML to prevent XSS (even though we are just parsing, it's good practice)
