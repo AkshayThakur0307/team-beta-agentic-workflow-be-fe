@@ -46,6 +46,9 @@ const App: React.FC = () => {
   const [showManual, setShowManual] = useState(false);
   const [urlInput, setUrlInput] = useState('');
 
+  // Generate a consistent random ID for this session
+  const sessionId = useMemo(() => Math.floor(100 + Math.random() * 900), []);
+
   // Refs
   const mainScrollRef = useRef<HTMLDivElement>(null);
   const liveSessionRef = useRef<any>(null);
@@ -680,8 +683,8 @@ Use the Stage-Specific Reference URLs provided to gather deep technical or busin
 
       <div className="pt-6 border-t border-slate-800/50 mt-6 shrink-0">
         <div className="p-4 rounded-2xl bg-slate-950/50 border border-slate-800/50 text-[9px] text-slate-500 space-y-1">
-          <div className="flex justify-between"><span>Instance</span> <span className="text-slate-400">PDS-ENTERPRISE-742</span></div>
-          <div className="flex justify-between"><span>Compute</span> <span className="text-slate-400">Gemini 3 Pro</span></div>
+          <div className="flex justify-between"><span>Compute</span> <span className="text-slate-400">Grok-3</span></div>
+          <div className="flex justify-between"><span>Team</span> <span className="text-slate-400">M+ Product Team : Beta</span></div>
           <div className="flex justify-between"><span>Security</span> <span className="text-emerald-500 font-bold">ENCRYPTED</span></div>
         </div>
       </div>
@@ -1168,7 +1171,7 @@ Use the Stage-Specific Reference URLs provided to gather deep technical or busin
                         <h4 className="text-base font-black text-white uppercase tracking-tighter leading-none mb-1">Discovery Analysis Brief</h4>
                         <div className="flex items-center gap-3 mt-2 flex-wrap">
                           <span className="text-[9px] font-black text-indigo-400 uppercase tracking-widest py-1 px-2 bg-indigo-500/10 rounded-md border border-indigo-500/20">Agent: {STAGE_CONFIGS[state.currentStage].agentName}</span>
-                          <span className="text-[9px] font-black text-slate-500 uppercase tracking-widest py-1 px-2 bg-slate-800/40 rounded-md">ID: {state.currentStage}-742</span>
+                          <span className="text-[9px] font-black text-slate-500 uppercase tracking-widest py-1 px-2 bg-slate-800/40 rounded-md">ID: {state.currentStage}-{sessionId}</span>
                           <span className="text-[9px] font-black text-emerald-500 uppercase tracking-widest py-1 px-2 bg-emerald-500/10 rounded-md border border-emerald-500/20">Verified</span>
                         </div>
                       </div>
