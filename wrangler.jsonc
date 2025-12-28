@@ -3,5 +3,12 @@
     "compatibility_date": "2025-12-27",
     "assets": {
         "directory": "./dist"
-    }
+    },
+    "d1_databases": [
+        {
+            "binding": "DB",
+            "database_name": "discovery_db",
+            "database_id": "06950275-c081-432d-8692-23c310c93068"
+        }
+    ]
 }

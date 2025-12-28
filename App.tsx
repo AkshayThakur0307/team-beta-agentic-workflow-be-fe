@@ -45,6 +45,56 @@ const App: React.FC = () => {
   const [showHistory, setShowHistory] = useState(false);
   const [showManual, setShowManual] = useState(false);
   const [urlInput, setUrlInput] = useState('');
+  const [isSyncing, setIsSyncing] = useState(false);
+
+  // Load state from backend on mount
+  useEffect(() => {
+    const loadState = async () => {
+      try {
+        const response = await fetch('/api/project');
+        if (response.ok) {
+          const data = await response.json();
+          setState(prev => ({
+            ...prev,
+            currentStage: data.currentStage,
+            projectMetadata: data.projectMetadata,
+            stages: {
+              ...prev.stages,
+              ...data.stages
+            }
+          }));
+        }
+      } catch (err) {
+        console.error("Failed to load project state:", err);
+      }
+    };
+    loadState();
+  }, []);
+
+  // Save state to backend on changes
+  useEffect(() => {
+    const saveState = async () => {
+      // Debounce saving or only save on specific actions to avoid excessive API calls
+      // For now, let's keep it simple and handle it in specific handlers or with a short timeout
+    };
+
+    // We'll call a manual sync function for reliability
+  }, [state]);
+
+  const syncToBackend = async (newState: AppState) => {
+    setIsSyncing(true);
+    try {
+      await fetch('/api/project', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newState)
+      });
+    } catch (err) {
+      console.error("Failed to sync to backend:", err);
+    } finally {
+      setIsSyncing(false);
+    }
+  };
 
   // Generate a consistent random ID for this session
   const sessionId = useMemo(() => Math.floor(100 + Math.random() * 900), []);
@@ -192,20 +242,25 @@ const App: React.FC = () => {
 
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const value = e.target.value;
-    setState(prev => ({
-      ...prev,
+    const newState = {
+      ...state,
       stages: {
-        ...prev.stages,
-        [prev.currentStage]: { ...prev.stages[prev.currentStage], input: value }
+        ...state.stages,
+        [state.currentStage]: { ...state.stages[state.currentStage], input: value }
       }
-    }));
+    };
+    setState(newState);
+    // Debounced sync would be better here, but for now:
+    syncToBackend(newState);
   };
 
   const handleMetadataChange = (field: keyof ProjectMetadata, value: string) => {
-    setState(prev => ({
-      ...prev,
-      projectMetadata: { ...prev.projectMetadata, [field]: value }
-    }));
+    const newState = {
+      ...state,
+      projectMetadata: { ...state.projectMetadata, [field]: value }
+    };
+    setState(newState);
+    syncToBackend(newState);
   };
 
   const handleUrlAdd = () => {
@@ -213,32 +268,35 @@ const App: React.FC = () => {
     let url = urlInput.trim();
     if (!url.startsWith('http')) url = 'https://' + url;
 
-    setState(prev => ({
-      ...prev,
+    const newState = {
+      ...state,
       stages: {
-        ...prev.stages,
-        [prev.currentStage]: {
-          ...prev.stages[prev.currentStage],
-          urls: [...(prev.stages[prev.currentStage].urls || []), url]
+        ...state.stages,
+        [state.currentStage]: {
+          ...state.stages[state.currentStage],
+          urls: [...(state.stages[state.currentStage].urls || []), url]
         }
       }
-    }));
+    };
+    setState(newState);
+    syncToBackend(newState);
     setUrlInput('');
   };
 
   const handleUrlRemove = (url: string) => {
-    setState(prev => ({
-      ...prev,
+    const newState = {
+      ...state,
       stages: {
-        ...prev.stages,
-        [prev.currentStage]: {
-          ...prev.stages[prev.currentStage],
-          urls: (prev.stages[prev.currentStage].urls || []).filter(u => u !== url)
+        ...state.stages,
+        [state.currentStage]: {
+          ...state.stages[state.currentStage],
+          urls: (state.stages[state.currentStage].urls || []).filter(u => u !== url)
         }
       }
-    }));
+    };
+    setState(newState);
+    syncToBackend(newState);
   };
-
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>, isReference: boolean = false) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
@@ -292,30 +350,34 @@ const App: React.FC = () => {
       newFiles.push({ name: file.name, content, mimeType: file.type, size: file.size });
     }
 
-    setState(prev => ({
-      ...prev,
+    const newState = {
+      ...state,
       stages: {
-        ...prev.stages,
-        [prev.currentStage]: {
-          ...prev.stages[prev.currentStage],
-          files: [...prev.stages[prev.currentStage].files, ...newFiles]
+        ...state.stages,
+        [state.currentStage]: {
+          ...state.stages[state.currentStage],
+          files: [...state.stages[state.currentStage].files, ...newFiles]
         }
       }
-    }));
+    };
+    setState(newState);
+    syncToBackend(newState);
     e.target.value = '';
   };
 
   const removeFile = (fileName: string) => {
-    setState(prev => ({
-      ...prev,
+    const newState = {
+      ...state,
       stages: {
-        ...prev.stages,
-        [prev.currentStage]: {
-          ...prev.stages[prev.currentStage],
-          files: prev.stages[prev.currentStage].files.filter(f => f.name !== fileName)
+        ...state.stages,
+        [state.currentStage]: {
+          ...state.stages[state.currentStage],
+          files: state.stages[state.currentStage].files.filter(f => f.name !== fileName)
         }
       }
-    }));
+    };
+    setState(newState);
+    syncToBackend(newState);
   };
 
   const removeFormatReference = () => {
@@ -332,16 +394,18 @@ const App: React.FC = () => {
   };
 
   const handleAnswerChange = (qIdx: number, val: string) => {
-    setState(prev => ({
-      ...prev,
+    const newState = {
+      ...state,
       stages: {
-        ...prev.stages,
-        [prev.currentStage]: {
-          ...prev.stages[prev.currentStage],
-          answers: { ...prev.stages[prev.currentStage].answers, [qIdx.toString()]: val }
+        ...state.stages,
+        [state.currentStage]: {
+          ...state.stages[state.currentStage],
+          answers: { ...state.stages[state.currentStage].answers, [qIdx.toString()]: val }
         }
       }
-    }));
+    };
+    setState(newState);
+    syncToBackend(newState);
   };
 
   const importPrevious = () => {
@@ -477,7 +541,7 @@ Use the Stage-Specific Reference URLs provided to gather deep technical or busin
               searchEntryPointHtml: result.searchEntryPointHtml
             };
 
-            return {
+            const newState = {
               ...prev,
               stages: {
                 ...prev.stages,
@@ -493,6 +557,8 @@ Use the Stage-Specific Reference URLs provided to gather deep technical or busin
                 }
               }
             };
+            syncToBackend(newState);
+            return newState;
           });
           return null;
         }
@@ -585,10 +651,10 @@ Use the Stage-Specific Reference URLs provided to gather deep technical or busin
         setAnalyzingStage(null);
       }
       setIsPresenting(false);
-      setState(prev => ({
-        ...prev,
+      const newState = {
+        ...state,
         stages: {
-          ...prev.stages,
+          ...state.stages,
           [stageToReset]: {
             input: '',
             output: '',
@@ -604,7 +670,9 @@ Use the Stage-Specific Reference URLs provided to gather deep technical or busin
             coherenceScore: 0
           }
         }
-      }));
+      };
+      setState(newState);
+      syncToBackend(newState);
     }
   };
 
