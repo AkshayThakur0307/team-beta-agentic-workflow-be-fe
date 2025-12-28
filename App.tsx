@@ -53,7 +53,7 @@ const App: React.FC = () => {
       try {
         const response = await fetch('/api/project');
         if (response.ok) {
-          const data = await response.json();
+          const data = await response.json() as AppState;
           setState(prev => ({
             ...prev,
             currentStage: data.currentStage,
@@ -250,8 +250,6 @@ const App: React.FC = () => {
       }
     };
     setState(newState);
-    // Debounced sync would be better here, but for now:
-    syncToBackend(newState);
   };
 
   const handleMetadataChange = (field: keyof ProjectMetadata, value: string) => {
@@ -260,7 +258,6 @@ const App: React.FC = () => {
       projectMetadata: { ...state.projectMetadata, [field]: value }
     };
     setState(newState);
-    syncToBackend(newState);
   };
 
   const handleUrlAdd = () => {
@@ -279,7 +276,6 @@ const App: React.FC = () => {
       }
     };
     setState(newState);
-    syncToBackend(newState);
     setUrlInput('');
   };
 
@@ -295,7 +291,6 @@ const App: React.FC = () => {
       }
     };
     setState(newState);
-    syncToBackend(newState);
   };
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>, isReference: boolean = false) => {
     const files = e.target.files;
@@ -361,7 +356,6 @@ const App: React.FC = () => {
       }
     };
     setState(newState);
-    syncToBackend(newState);
     e.target.value = '';
   };
 
@@ -377,7 +371,6 @@ const App: React.FC = () => {
       }
     };
     setState(newState);
-    syncToBackend(newState);
   };
 
   const removeFormatReference = () => {
@@ -405,7 +398,6 @@ const App: React.FC = () => {
       }
     };
     setState(newState);
-    syncToBackend(newState);
   };
 
   const importPrevious = () => {
@@ -853,6 +845,21 @@ Use the Stage-Specific Reference URLs provided to gather deep technical or busin
             >
               {voice.isSpeaking && <div className="absolute inset-0 bg-indigo-400/20 animate-pulse"></div>}
               <i className={`fas ${voice.isActive ? 'fa-microphone' : 'fa-microphone-slash'} text-xs sm:text-sm z-10 ${voice.isSpeaking ? 'animate-bounce' : ''}`}></i>
+            </button>
+
+            <button
+              onClick={() => syncToBackend(state)}
+              disabled={isSyncing || !isMetadataComplete}
+              className={`w-9 h-9 sm:w-10 sm:h-10 rounded-xl flex items-center justify-center transition-all duration-300 border bg-slate-800/50 border-slate-700 text-slate-400 hover:text-emerald-400 hover:border-emerald-500/50 hover:shadow-[0_0_15px_rgba(16,185,129,0.2)]
+                ${!isMetadataComplete ? 'opacity-30 cursor-not-allowed' : ''}
+              `}
+              title="Save Project Progress"
+            >
+              {isSyncing ? (
+                <div className="w-4 h-4 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin"></div>
+              ) : (
+                <i className="fas fa-cloud-upload-alt text-xs sm:text-sm"></i>
+              )}
             </button>
 
             {currentStageData.output && (
@@ -1606,7 +1613,12 @@ Use the Stage-Specific Reference URLs provided to gather deep technical or busin
                 {!isMetadataComplete ? <span className="text-rose-500">* All starred fields required</span> : <span className="text-emerald-500 flex items-center gap-2"><i className="fas fa-check"></i> Strategy Locked</span>}
               </p>
               <button
-                onClick={() => isMetadataComplete && setShowProjectConfig(false)}
+                onClick={() => {
+                  if (isMetadataComplete) {
+                    syncToBackend(state);
+                    setShowProjectConfig(false);
+                  }
+                }}
                 disabled={!isMetadataComplete}
                 className="w-full sm:w-auto px-16 py-5 btn-grad rounded-[2rem] text-[12px] font-black uppercase tracking-[0.25em] disabled:opacity-30 transition-all hover:px-20"
               >
