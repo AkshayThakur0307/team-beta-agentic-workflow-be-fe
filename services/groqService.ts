@@ -18,8 +18,8 @@ export async function callGroqAgent(
 ): Promise<GroqAgentResponse> {
 
     if (!process.env.GROQ_API_KEY) {
-        console.error("GROQ_API_KEY is missing from environment variables.");
-        throw new Error("Missing GROQ_API_KEY in environment variables.");
+        console.error("GROQ_API_KEY is missing from environment variables. If this is a production build, ensure the key is provided at build time (e.g., in CI/CD or before running 'npm run build').");
+        throw new Error("Missing GROQ_API_KEY in environment variables. Check your build-time environment setup.");
     }
     console.log("GROQ_API_KEY is present.");
 

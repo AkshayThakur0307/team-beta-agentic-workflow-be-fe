@@ -6,7 +6,7 @@ export async function scrapeUrl(url: string): Promise<string> {
         // Reverting to AllOrigins per user request
         console.log(`Scraping URL via AllOrigins: ${url}`);
 
-        const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`;
+        const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(url)}&timestamp=${Date.now()}`;
 
         const response = await fetch(proxyUrl);
         console.log(`Proxy response status: ${response.status} ${response.statusText}`);
