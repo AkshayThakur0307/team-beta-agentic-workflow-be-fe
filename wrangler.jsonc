@@ -1,14 +1,14 @@
 {
     "name": "teambeta-discovery-agentic-app",
-    "compatibility_date": "2025-12-27",
+    "compatibility_date": "2025-12-28",
     "assets": {
         "directory": "./dist"
     },
     "d1_databases": [
         {
-            "binding": "DB",
+            "binding": "discovery_db",
             "database_name": "discovery_db",
-            "database_id": "06950275-c081-432d-8692-23c310c93068"
+            "database_id": "db3b3f63-1c50-43bd-aa19-9aece484fc4a"
         }
     ]
 }
