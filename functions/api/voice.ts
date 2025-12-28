@@ -1,9 +1,13 @@
+/// <reference types="@cloudflare/workers-types" />
 import Groq from "groq-sdk";
 
 export const onRequestPost: PagesFunction<{
     GROQ_API_KEY: string
 }> = async ({ request, env }) => {
     try {
+        if (!env.GROQ_API_KEY) {
+            return new Response(JSON.stringify({ error: "Missing GROQ_API_KEY on server" }), { status: 500 });
+        }
         const formData = await request.formData();
         const audioFile = formData.get('file') as File;
         const appState = JSON.parse(formData.get('appState') as string);

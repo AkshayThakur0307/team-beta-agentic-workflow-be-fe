@@ -1,5 +1,18 @@
-export const onRequestGet: PagesFunction<{ discovery_db: D1Database }> = async ({ env }) => {
+/// <reference types="@cloudflare/workers-types" />
+
+interface Env {
+    discovery_db: D1Database;
+}
+
+export const onRequestGet: PagesFunction<Env> = async ({ env }) => {
     try {
+        if (!env.discovery_db) {
+            return new Response(JSON.stringify({ error: "D1 database binding 'discovery_db' is missing" }), {
+                status: 500,
+                headers: { "Content-Type": "application/json" },
+            });
+        }
+
         const { results } = await env.discovery_db.prepare(
             "SELECT * FROM projects LIMIT 1"
         ).all();
@@ -64,7 +77,7 @@ export const onRequestGet: PagesFunction<{ discovery_db: D1Database }> = async (
     }
 };
 
-export const onRequestPost: PagesFunction<{ discovery_db: D1Database }> = async ({ request, env }) => {
+export const onRequestPost: PagesFunction<Env> = async ({ request, env }) => {
     try {
         const body: any = await request.json();
         const { projectMetadata, currentStage, stages } = body;
@@ -88,11 +101,11 @@ export const onRequestPost: PagesFunction<{ discovery_db: D1Database }> = async 
         // Sync stages and save versions
         for (const [stageName, stageData] of Object.entries(stages) as [string, any][]) {
             // Get current output to see if it changed
-            const { results: currentStage } = await env.discovery_db.prepare(
+            const { results: existingStageData } = await env.discovery_db.prepare(
                 "SELECT output FROM stages WHERE project_id = ? AND stage_name = ?"
             ).bind(projectId, stageName).all();
 
-            const hasChanged = stageData.status === 'completed' && (!currentStage.length || currentStage[0].output !== stageData.output);
+            const hasChanged = stageData.status === 'completed' && (!existingStageData.length || (existingStageData[0] as any).output !== stageData.output);
 
             await env.discovery_db.prepare(`
         INSERT INTO stages (
@@ -130,7 +143,7 @@ export const onRequestPost: PagesFunction<{ discovery_db: D1Database }> = async 
                     INSERT INTO stage_versions (id, project_id, stage_name, output, questions, coherence_score, created_at)
                     VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
                 `).bind(
-                    crypto.randomUUID(),
+                    globalThis.crypto.randomUUID(),
                     projectId,
                     stageName,
                     stageData.output,

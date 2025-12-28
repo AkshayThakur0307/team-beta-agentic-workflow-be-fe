@@ -1,3 +1,4 @@
+/// <reference types="@cloudflare/workers-types" />
 import Groq from "groq-sdk";
 
 export const onRequestPost: PagesFunction<{
@@ -6,6 +7,9 @@ export const onRequestPost: PagesFunction<{
     SERPER_API_KEY: string
 }> = async ({ request, env }) => {
     try {
+        if (!env.discovery_db) {
+            return new Response(JSON.stringify({ error: "Missing D1 database binding 'discovery_db'" }), { status: 500 });
+        }
         const {
             modelName,
             systemInstruction,
