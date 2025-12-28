@@ -18,11 +18,26 @@ export const onRequestGet: PagesFunction<{ discovery_db: D1Database }> = async (
             "SELECT * FROM stages WHERE project_id = ?"
         ).bind(project.id).all();
 
+        // Get versions for all stages
+        const { results: versions } = await env.discovery_db.prepare(
+            "SELECT * FROM stage_versions WHERE project_id = ? ORDER BY created_at DESC"
+        ).bind(project.id).all();
+
         // Reconstruct the AppState-like object
         const appState = {
             currentStage: project.current_stage,
             projectMetadata: JSON.parse(project.metadata),
             stages: stages.reduce((acc: any, stage: any) => {
+                const stageVersions = (versions as any[])
+                    .filter(v => v.stage_name === stage.stage_name)
+                    .map(v => ({
+                        id: v.id,
+                        timestamp: new Date(v.created_at).getTime(),
+                        output: v.output,
+                        questions: JSON.parse(v.questions || '[]'),
+                        coherenceScore: v.coherence_score
+                    }));
+
                 acc[stage.stage_name] = {
                     input: stage.input,
                     output: stage.output,
@@ -32,7 +47,7 @@ export const onRequestGet: PagesFunction<{ discovery_db: D1Database }> = async (
                     groundingSources: JSON.parse(stage.grounding_sources || '[]'),
                     searchEntryPointHtml: stage.search_entry_point_html,
                     coherenceScore: stage.coherence_score,
-                    versions: [] // We could fetch versions here if needed
+                    versions: stageVersions
                 };
                 return acc;
             }, {})
@@ -70,8 +85,15 @@ export const onRequestPost: PagesFunction<{ discovery_db: D1Database }> = async 
             currentStage
         ).run();
 
-        // Sync stages
+        // Sync stages and save versions
         for (const [stageName, stageData] of Object.entries(stages) as [string, any][]) {
+            // Get current output to see if it changed
+            const { results: currentStage } = await env.discovery_db.prepare(
+                "SELECT output FROM stages WHERE project_id = ? AND stage_name = ?"
+            ).bind(projectId, stageName).all();
+
+            const hasChanged = stageData.status === 'completed' && (!currentStage.length || currentStage[0].output !== stageData.output);
+
             await env.discovery_db.prepare(`
         INSERT INTO stages (
             project_id, stage_name, input, output, status, 
@@ -101,6 +123,21 @@ export const onRequestPost: PagesFunction<{ discovery_db: D1Database }> = async 
                 stageData.searchEntryPointHtml || null,
                 stageData.coherenceScore || 0
             ).run();
+
+            // Store in stage_versions if it's a new completed output
+            if (hasChanged) {
+                await env.discovery_db.prepare(`
+                    INSERT INTO stage_versions (id, project_id, stage_name, output, questions, coherence_score, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                `).bind(
+                    crypto.randomUUID(),
+                    projectId,
+                    stageName,
+                    stageData.output,
+                    JSON.stringify(stageData.questions || []),
+                    stageData.coherenceScore || 0
+                ).run();
+            }
         }
 
         return new Response(JSON.stringify({ success: true }), {

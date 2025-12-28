@@ -12,9 +12,10 @@ export async function callGroqAgent(
     userPrompt: string,
     contextFiles: FileContext[] = [],
     isThinking: boolean = false,
-    useSearch: boolean = false
+    useSearch: boolean = false,
+    onProgress?: (text: string) => void
 ): Promise<GroqAgentResponse> {
-    console.log("Calling Backend AI Orchestrator...");
+    console.log("Calling Backend AI Orchestrator (Streaming)...");
 
     try {
         const response = await fetch('/api/analyze', {
@@ -35,11 +36,40 @@ export async function callGroqAgent(
             throw new Error(errData.error || "Backend analysis failed");
         }
 
-        const data = await response.json() as any;
+        const reader = response.body?.getReader();
+        const decoder = new TextDecoder();
+        let aggregatedText = "";
+        let sources: GroundingSource[] | undefined;
+
+        if (!reader) throw new Error("No readable stream in response");
+
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            const chunk = decoder.decode(value, { stream: true });
+            const lines = chunk.split('\n');
+
+            for (const line of lines) {
+                if (!line.trim()) continue;
+                try {
+                    const data = JSON.parse(line);
+                    if (data.sources) {
+                        sources = data.sources;
+                    }
+                    if (data.text) {
+                        aggregatedText += data.text;
+                        if (onProgress) onProgress(data.text);
+                    }
+                } catch (e) {
+                    console.warn("Failed to parse stream line:", line);
+                }
+            }
+        }
+
         return {
-            text: data.text,
-            sources: data.sources,
-            searchEntryPointHtml: data.searchEntryPointHtml
+            text: aggregatedText,
+            sources: sources
         };
 
     } catch (error: any) {

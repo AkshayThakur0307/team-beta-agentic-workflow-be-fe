@@ -515,13 +515,38 @@ Use the Stage-Specific Reference URLs provided to gather deep technical or busin
         finalUserPrompt += `\n\n=== SCRAPED WEB CONTENT ===\n${scrapedResults.join('\n\n----------------\n\n')}\n===========================`;
       }
 
+      // Clear previous output before starting
+      setState(prev => ({
+        ...prev,
+        stages: {
+          ...prev.stages,
+          [targetStage]: {
+            ...prev.stages[targetStage],
+            output: "",
+            status: 'analyzing'
+          }
+        }
+      }));
+
       const result = await callGroqAgent(
         'openai/gpt-oss-120b',
         STAGE_CONFIGS[targetStage].systemInstruction,
         finalUserPrompt,
         allFiles,
         isThinkingEnabled,
-        isSearchEnabled
+        isSearchEnabled,
+        (partialText) => {
+          setState(prev => ({
+            ...prev,
+            stages: {
+              ...prev.stages,
+              [targetStage]: {
+                ...prev.stages[targetStage],
+                output: (prev.stages[targetStage].output || "") + partialText
+              }
+            }
+          }));
+        }
       );
 
       const finalCoherence = calculateCoherenceScore();
