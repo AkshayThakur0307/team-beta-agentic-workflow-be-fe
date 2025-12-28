@@ -1,4 +1,3 @@
-import Groq from "groq-sdk";
 import { AppState, DiscoveryStage } from '../types';
 import { STAGE_CONFIGS } from '../constants';
 
@@ -11,7 +10,6 @@ export interface VoiceHandlers {
 }
 
 export class GroqVoiceAssistant {
-    private groq: Groq;
     private handlers: VoiceHandlers;
     private appState: AppState;
     private mediaRecorder: MediaRecorder | null = null;
@@ -19,7 +17,6 @@ export class GroqVoiceAssistant {
     private isProcessing = false;
 
     constructor(handlers: VoiceHandlers, appState: AppState) {
-        this.groq = new Groq({ apiKey: process.env.GROQ_API_KEY, dangerouslyAllowBrowser: true });
         this.handlers = handlers;
         this.appState = appState;
     }
@@ -59,107 +56,58 @@ export class GroqVoiceAssistant {
         this.isProcessing = true;
 
         try {
-            // 1. Transcription using Whisper-Large-V3-Turbo
-            const file = new File([blob], 'audio.webm', { type: 'audio/webm' });
-            const transcription = await this.groq.audio.transcriptions.create({
-                file: file,
-                model: 'whisper-large-v3-turbo',
-            });
+            const formData = new FormData();
+            formData.append('file', blob, 'audio.webm');
+            formData.append('appState', JSON.stringify(this.appState));
 
-            const userText = transcription.text;
-            if (!userText.trim()) return;
-
-            this.handlers.onTranscription(userText, 'user');
-
-            // 2. Intelligent Response & Action using GPT-OSS-120B
             const currentStageData = this.appState.stages[this.appState.currentStage];
             const questionsContext = currentStageData.questions.length > 0
                 ? `Refinement Questions Available:\n${currentStageData.questions.map((q, i) => `${i}: ${q}`).join('\n')}`
                 : "No refinement questions currently.";
 
             const systemPrompt = `
-        You are the PRSIM.AI Discovery Voice Assistant powered by GPT-OSS-120B.
-        
-        Current Module: ${this.appState.currentStage} (${STAGE_CONFIGS[this.appState.currentStage].title})
-        Current Text Input: "${currentStageData.input}"
-        ${questionsContext}
-        
-        GOAL:
-        - Determine if the user is providing new info, answering a question, or switching modules.
-        - Respond concisely for text-to-speech.
-        - You MUST use one of the tools provided to update the app state.
-      `;
+                You are the PRSIM.AI Discovery Voice Assistant powered by GPT-OSS-120B.
+                
+                Current Module: ${this.appState.currentStage} (${STAGE_CONFIGS[this.appState.currentStage].title})
+                Current Text Input: "${currentStageData.input}"
+                ${questionsContext}
+                
+                GOAL:
+                - Determine if the user is providing new info, answering a question, or switching modules.
+                - Respond concisely for text-to-speech.
+                - You MUST use one of the tools provided to update the app state.
+            `;
+            formData.append('systemPrompt', systemPrompt);
 
-            const response = await this.groq.chat.completions.create({
-                model: 'openai/gpt-oss-120b',
-                messages: [
-                    { role: 'system', content: systemPrompt },
-                    { role: 'user', content: userText }
-                ],
-                tools: [
-                    {
-                        type: 'function',
-                        function: {
-                            name: 'updateMainContext',
-                            description: 'Update the primary text box for the project analysis.',
-                            parameters: {
-                                type: 'object',
-                                properties: {
-                                    text: { type: 'string' },
-                                    mode: { type: 'string', enum: ['replace', 'append'] }
-                                },
-                                required: ['text', 'mode']
-                            }
-                        }
-                    },
-                    {
-                        type: 'function',
-                        function: {
-                            name: 'updateRefinementAnswer',
-                            description: 'Answer a specific follow-up question.',
-                            parameters: {
-                                type: 'object',
-                                properties: {
-                                    index: { type: 'number' },
-                                    text: { type: 'string' }
-                                },
-                                required: ['index', 'text']
-                            }
-                        }
-                    },
-                    {
-                        type: 'function',
-                        function: {
-                            name: 'switchModule',
-                            description: 'Navigate to a different discovery stage.',
-                            parameters: {
-                                type: 'object',
-                                properties: {
-                                    module: { type: 'string', enum: ['DOMAIN', 'BOD', 'KPI', 'EPICS'] }
-                                },
-                                required: ['module']
-                            }
-                        }
-                    }
-                ],
-                tool_choice: 'auto',
+            const response = await fetch('/api/voice', {
+                method: 'POST',
+                body: formData
             });
 
-            const aiMessage = response.choices[0].message;
+            if (!response.ok) throw new Error("Voice processing failed on backend");
 
-            // Handle Tool Calls
-            if (aiMessage.tool_calls) {
-                for (const toolCall of aiMessage.tool_calls) {
-                    const args = JSON.parse(toolCall.function.arguments);
-                    if (toolCall.function.name === 'updateMainContext') this.handlers.onUpdateMainContext(args.text, args.mode);
-                    if (toolCall.function.name === 'updateRefinementAnswer') this.handlers.onUpdateRefinementAnswer(args.index, args.text);
-                    if (toolCall.function.name === 'switchModule') this.handlers.onSwitchModule(args.module);
+            const data = await response.json() as any;
+            if (!data.userText) return;
+
+            this.handlers.onTranscription(data.userText, 'user');
+
+            if (data.aiResponse) {
+                const aiMessage = data.aiResponse;
+
+                // Handle Tool Calls
+                if (aiMessage.tool_calls) {
+                    for (const toolCall of aiMessage.tool_calls) {
+                        const args = JSON.parse(toolCall.function.arguments);
+                        if (toolCall.function.name === 'updateMainContext') this.handlers.onUpdateMainContext(args.text, args.mode);
+                        if (toolCall.function.name === 'updateRefinementAnswer') this.handlers.onUpdateRefinementAnswer(args.index, args.text);
+                        if (toolCall.function.name === 'switchModule') this.handlers.onSwitchModule(args.module);
+                    }
                 }
-            }
 
-            const replyText = aiMessage.content || "Got it. I've updated the project details.";
-            this.handlers.onTranscription(replyText, 'assistant');
-            this.speak(replyText);
+                const replyText = aiMessage.content || "Got it. I've updated the project details.";
+                this.handlers.onTranscription(replyText, 'assistant');
+                this.speak(replyText);
+            }
 
         } catch (err) {
             console.error("Voice Processing Error:", err);
@@ -180,3 +128,4 @@ export class GroqVoiceAssistant {
         window.speechSynthesis.speak(utterance);
     }
 }
+

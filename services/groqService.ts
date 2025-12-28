@@ -1,6 +1,4 @@
-import Groq from "groq-sdk";
 import { FileContext, GroundingSource } from "../types";
-import { searchGoogle } from "./searchService";
 
 export interface GroqAgentResponse {
     text: string;
@@ -9,183 +7,44 @@ export interface GroqAgentResponse {
 }
 
 export async function callGroqAgent(
-    modelName: string, // Kept for compatibility, but mapped internally
+    modelName: string,
     systemInstruction: string,
     userPrompt: string,
     contextFiles: FileContext[] = [],
     isThinking: boolean = false,
     useSearch: boolean = false
 ): Promise<GroqAgentResponse> {
-
-    if (!process.env.GROQ_API_KEY) {
-        console.error("GROQ_API_KEY is missing from environment variables. If this is a production build, ensure the key is provided at build time (e.g., in CI/CD or before running 'npm run build').");
-        throw new Error("Missing GROQ_API_KEY in environment variables. Check your build-time environment setup.");
-    }
-    console.log("GROQ_API_KEY is present.");
-
-    const groq = new Groq({ apiKey: process.env.GROQ_API_KEY, dangerouslyAllowBrowser: true });
-
-    const messages: any[] = [
-        {
-            role: "system",
-            content: isThinking
-                ? `You are an expert Strategic Product Analyst with advanced reasoning capabilities.
-Before providing your final response, you MUST step through your internal reasoning process within <thought> tags.
-In your thinking process:
-- Analyze the user's specific request and context.
-- Evaluate potential business models or strategies.
-- Anticipate risks and contradictions.
-- Plan the structure of the final output.
-
-Once your internal thinking is complete, provide the final structured output exactly as requested, following the specific system instructions provided below.
-
-INSTRUCTIONS:
-${systemInstruction}`
-                : systemInstruction
-        }
-    ];
-
-    // Image/Multimodal Handling
-    const hasMultimodal = contextFiles.some(f => f.mimeType.startsWith('image/'));
-
-    let searchSources: GroundingSource[] = [];
-
-    // RESEARCH GROUNDING LOGIC
-    console.log("Research Grounding Check:", { useSearch, hasMultimodal, hasApiKey: !!process.env.SERPER_API_KEY });
-    if (useSearch) {
-        try {
-            // 1. Generate optimized search query if search is enabled
-            console.log("Synthesizing Search Query using Llama-3.3-70B...");
-
-            // Truncate userPrompt for search synthesis to avoid context limits and keep it focused
-            const searchSynthesisPrompt = userPrompt.length > 2000
-                ? userPrompt.slice(0, 2000) + "... [Truncated for search synthesis]"
-                : userPrompt;
-
-            console.log("Search Synthesis Prompt Snapshot:", searchSynthesisPrompt.slice(0, 500) + "...");
-
-            const queryResponse = await groq.chat.completions.create({
-                model: 'llama-3.3-70b-versatile',
-                messages: [
-                    {
-                        role: 'system',
-                        content: 'You are a professional research engine. Your task is to extract the core business intent from the user prompt and generate a single, high-impact Google search query. Even if the prompt is brief, generate a query to find relevant market trends or competitors. Output ONLY the query string. Do not use quotes or explanations.'
-                    },
-                    { role: 'user', content: searchSynthesisPrompt }
-                ],
-                temperature: 0.3, // Slightly higher for better query variety
-                max_tokens: 100,
-            });
-
-            console.log("Raw Query Response Choices:", JSON.stringify(queryResponse.choices));
-
-            // Improved cleaning: remove quotes, trailing dots, and markdown code blocks
-            let query = queryResponse.choices[0]?.message?.content?.trim() || "";
-            query = query.replace(/^["'`]|["'`]$/g, '') // Remove outer quotes
-                .replace(/^Query:\s*/i, '')     // Remove "Query: " prefix if added
-                .replace(/[\.\?]$/, '')         // Remove trailing punctuation
-                .trim();
-
-            console.log("Research Assistant Response:", query);
-
-            if (query && query.length > 3 && !query.toUpperCase().includes('NONE')) {
-                console.log("Executing Serper Search for:", query);
-                // 2. Perform Search
-                const searchResults = await searchGoogle(query);
-
-                if (searchResults.text) {
-                    console.log("Search results found and being injected.");
-                    // 3. Inject Results
-                    searchSources = searchResults.sources;
-                    const searchContext = `
-=== VERIFIED MARKET DATA (Query: ${query}) ===
-${searchResults.text}
-=============================================
-`;
-                    // Prepend search context to system instruction or user prompt
-                    userPrompt = `${searchContext}\n\n${userPrompt}`;
-                } else {
-                    console.log("Search executed but no snippets returned.");
-                }
-            } else {
-                console.log("Search skipped: Query was empty, too short, or 'NONE'.");
-            }
-        } catch (e: any) {
-            console.error("Research step failed with error:", e);
-            // Proceed without search
-        }
-    }
-
-    // Model Selection Logic
-    // Groq doesn't support "thinking" in the Google sense, but we map to high-reasoning models
-    // 2. Select optimized model for final analysis
-    // Use meta-llama/llama-4-scout-17b-16e-instruct ONLY if there are multimodal assets
-    // Force openai/gpt-oss-120b for all reasoning and text analysis
-    const selectedModel = hasMultimodal ? 'meta-llama/llama-4-scout-17b-16e-instruct' : 'openai/gpt-oss-120b';
-    console.log(`Using ${selectedModel} for ${hasMultimodal ? 'multimodal analysis' : 'reasoning'}...`);
-
-    // Construct User Message
-    if (hasMultimodal) {
-        const userContent: any[] = [{ type: "text", text: userPrompt }];
-
-        contextFiles.forEach(file => {
-            if (file.mimeType.startsWith('image/')) {
-                userContent.push({
-                    type: "image_url",
-                    image_url: {
-                        url: `data:${file.mimeType};base64,${file.content}`
-                    }
-                });
-            } else {
-                // Append text files to the prompt text if mixed with images
-                userContent[0].text += `\n\n[FILE: ${file.name}]\n${file.content}`;
-            }
-        });
-
-        messages.push({ role: "user", content: userContent });
-    } else {
-        // Pure Text Context
-        let fullPrompt = userPrompt;
-        contextFiles.forEach(file => {
-            fullPrompt += `\n\n[FILE: ${file.name}]\n${file.content}`;
-        });
-        messages.push({ role: "user", content: fullPrompt });
-    }
+    console.log("Calling Backend AI Orchestrator...");
 
     try {
-        const chatCompletion = await groq.chat.completions.create({
-            messages: messages,
-            model: selectedModel,
-            temperature: isThinking ? 0.7 : 0.5,
-            max_tokens: isThinking ? 4096 : 2048,
-            top_p: 1,
-            stop: null,
-            stream: false,
+        const response = await fetch('/api/analyze', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                modelName,
+                systemInstruction,
+                userPrompt,
+                contextFiles,
+                isThinking,
+                useSearch
+            })
         });
 
-        let text = chatCompletion.choices[0]?.message?.content || "No response received from Groq agent.";
-
-        // CLEANUP: Extract final answer by removing <thought> blocks
-        if (isThinking) {
-            console.log("Processing thinking output...");
-            // Remove everything between <thought> and </thought> inclusive
-            // Supporting both lowercase and uppercase tags
-            text = text.replace(/<(thought|THOUGHT)>[\s\S]*?<\/(thought|THOUGHT)>/gi, '').trim();
-            // Fallback: If model didn't use tags correctly but just started reasoning, we try to grab the structured parts
-            // But usually 120B/llama70b are good at following tag instructions.
+        if (!response.ok) {
+            const errData = await response.json() as any;
+            throw new Error(errData.error || "Backend analysis failed");
         }
 
-        // Groq currently doesn't support Search Grounding like Gemini (entryPoint/chunks)
-        // We return undefined for sources/html to safely degrade the UI.
-
+        const data = await response.json() as any;
         return {
-            text,
-            sources: searchSources.length > 0 ? searchSources : undefined,
-            searchEntryPointHtml: undefined
+            text: data.text,
+            sources: data.sources,
+            searchEntryPointHtml: data.searchEntryPointHtml
         };
 
     } catch (error: any) {
-        console.error("Groq API Error:", error);
-        throw new Error(error.message || "Groq communication failure.");
+        console.error("Analysis Error:", error);
+        throw new Error(error.message || "Communication failure with backend.");
     }
 }
+
